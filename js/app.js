@@ -25,6 +25,7 @@
     playerClose: document.getElementById('playerClose'),
     player: document.getElementById('player'),
     playerLoading: document.getElementById('playerLoading'),
+    startPlayback: document.getElementById('startPlayback'),
     playerError: document.getElementById('playerError'),
     playerErrorMsg: document.getElementById('playerError').querySelector('.player-error-msg'),
     retryPlayer: document.getElementById('retryPlayer'),
@@ -356,7 +357,10 @@
 
         if (error && error.name === 'NotAllowedError') {
           const hint = els.playerLoading.querySelector('span');
-          if (hint) hint.textContent = 'Autoplay was blocked — press Play to start this channel.';
+          if (hint) hint.textContent = 'Autoplay is blocked by your browser.';
+          // Keep the overlay actionable: native controls sit underneath it.
+          // The button click calls play() directly inside the user gesture.
+          els.startPlayback.classList.remove('hidden');
           els.playerLoading.classList.remove('hidden');
           return;
         }
@@ -391,6 +395,7 @@
     const video = els.player;
     els.playerError.classList.add('hidden');
     els.playerLoading.classList.remove('hidden');
+    els.startPlayback.classList.add('hidden');
     const loadingLabel = els.playerLoading.querySelector('span');
     if (loadingLabel) loadingLabel.textContent = 'Connecting to stream…';
     els.streamInfo.textContent = '';
@@ -419,6 +424,7 @@
       if (attempt !== playbackAttempt) return;
       clearPlaybackTimer();
       els.playerLoading.classList.add('hidden');
+      els.startPlayback.classList.add('hidden');
       els.playerError.classList.add('hidden');
     };
 
@@ -527,6 +533,35 @@
 
   els.retryPlayer.onclick = () => playNextMirror();
 
+  // A browser may reject autoplay even after a valid stream is loaded. Provide
+  // a real user-gesture button above the video controls instead of trapping
+  // the user behind a permanent loading overlay.
+  els.startPlayback.onclick = () => {
+    const attempt = playbackAttempt;
+    const video = els.player;
+    video.muted = false;
+    let playRequest;
+    try {
+      playRequest = video.play();
+    } catch (error) {
+      if (attempt === playbackAttempt) {
+        const hint = els.playerLoading.querySelector('span');
+        if (hint) hint.textContent = 'Playback is still blocked. Check your browser permissions and try again.';
+      }
+      return;
+    }
+    if (playRequest && typeof playRequest.then === 'function') {
+      playRequest.then(() => {
+        if (attempt !== playbackAttempt) return;
+        els.startPlayback.classList.add('hidden');
+      }).catch((error) => {
+        if (attempt !== playbackAttempt || (error && error.name === 'AbortError')) return;
+        const hint = els.playerLoading.querySelector('span');
+        if (hint) hint.textContent = 'Could not start playback. Try another stream mirror.';
+      });
+    }
+  };
+
   // --- Fullscreen ---
   function toggleFullscreen() {
     const container = els.playerWrapEl || (els.playerWrapEl = document.querySelector('.player-wrap'));
@@ -583,6 +618,7 @@
     els.player.src = '';
     els.player.load();
     els.playerLoading.classList.add('hidden');
+    els.startPlayback.classList.add('hidden');
     els.playerError.classList.add('hidden');
     current = null;
   }

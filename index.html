@@ -2,123 +2,195 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Free TV — Watch Free Live TV Channels from Around the World</title>
-<meta name="description" content="14,000+ free live TV channels from 180+ countries. News, sports, movies, music and more — powered by iptv-org." />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#0a0a0f" />
+<title>FreeTV — Live TV from Around the World</title>
+<meta name="description" content="11,000+ free live TV channels from 180+ countries. News, sports, movies, music and more — stream instantly, no signup." />
 <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-<header class="header">
-  <div class="header-inner">
-    <div class="brand" aria-label="Free TV">
-      <span class="brand-mark">📺</span>
-      <span class="brand-name">Free<span class="brand-name-dark">TV</span></span>
+
+<!-- ============ TOP BAR (desktop) ============ -->
+<header class="topbar" id="topbar">
+  <div class="topbar-inner">
+    <a class="logo" href="#" aria-label="FreeTV home">
+      <span class="logo-mark">▶</span><span class="logo-text">Free<b>TV</b></span>
+    </a>
+
+    <nav class="nav-links" id="navLinks">
+      <button class="nav-link active" data-nav="home">Home</button>
+      <button class="nav-link" data-nav="news">News</button>
+      <button class="nav-link" data-nav="sports">Sports</button>
+      <button class="nav-link" data-nav="movies">Movies</button>
+      <button class="nav-link" data-nav="music">Music</button>
+      <button class="nav-link" data-nav="kids">Kids</button>
+    </nav>
+
+    <div class="topbar-search" id="topbarSearch">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+      <input type="search" id="searchInput" placeholder="Search channels, countries…" autocomplete="off" autocapitalize="off" />
+      <button class="clear-btn" id="searchClear" aria-label="Clear search">✕</button>
     </div>
-    <div class="search-wrap" role="search" aria-label="Search channels">
-      <span class="search-icon">🔍</span>
-      <input type="search" id="searchInput" placeholder="Search channels (e.g. CNN, BBC, India…)" autocapitalize="off" autocomplete="off" />
-      <span class="search-clear" id="searchClear" title="Clear">×</span>
-    </div>
-    <div class="header-meta">
-      <span id="metaBadge" class="badge">Loading…</span>
-      <button id="toggleSidebar" class="icon-btn" aria-label="Toggle filters"><span>☰</span></button>
+
+    <div class="topbar-actions">
+      <button class="round-btn" id="favBtn" aria-label="Favorites">
+        <svg viewBox="0 0 24 24" class="ico"><path d="M12 2l2.9 6.3 6.6.8-4.8 4.7 1.2 6.6L12 17.8 6.1 20.4l1.2-6.6L2.5 9.1l6.6-.8z"/></svg>
+      </button>
+      <div class="avatar" aria-hidden="true">FT</div>
     </div>
   </div>
 </header>
 
-<div class="app-body">
-  <!-- Sidebar: filters -->
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-inner">
-      <button class="sidebar-close" id="sidebarClose" aria-label="Close filters">✕</button>
-      <div class="section">
-        <h3 class="section-title">Category</h3>
-        <div class="pills" id="categoryPills"></div>
-      </div>
-      <div class="section">
-        <h3 class="section-title">Country</h3>
-        <div class="country-search">
-          <input type="search" id="countrySearch" placeholder="Filter countries…" autocomplete="off" />
-        </div>
-        <div class="country-list" id="countryList"></div>
-      </div>
-      <div class="section">
-        <h3 class="section-title">Favorites</h3>
-        <p class="section-hint" id="favHint">No favorites yet. Tap ★ on a channel.</p>
-        <div class="pills" id="favPills"></div>
-      </div>
-      <div class="section footnote">
-        Streams are provided by the public <a href="https://github.com/iptv-org/iptv" target="_blank" rel="noopener">iptv-org</a> playlist. Some channels are HTTP-only and may not play when the site is served over HTTPS.
-      </div>
-    </div>
-    <div class="sidebar-overlay" id="sidebarOverlay"></div>
-  </aside>
+<!-- ============ MAIN SCROLL AREA ============ -->
+<main class="page" id="page">
 
-  <!-- Main: channel grid -->
-  <main class="main">
-    <div class="toolbar">
-      <h1 id="viewTitle">All Channels</h1>
-      <div class="toolbar-right">
-        <span class="count-text" id="countText">0 channels</span>
-        <button id="viewGrid" class="view-btn active" aria-label="Grid view">⎈</button>
-        <button id="viewList" class="view-btn" aria-label="List view">☰</button>
+  <!-- HERO -->
+  <section class="hero" id="hero">
+    <div class="hero-bg" id="heroBg"></div>
+    <div class="hero-fade"></div>
+    <div class="hero-art" id="heroArt"></div>
+    <div class="hero-content">
+      <div class="hero-badge"><span class="live-dot"></span> LIVE NOW</div>
+      <h1 class="hero-title" id="heroTitle">Live TV, Worldwide</h1>
+      <p class="hero-sub" id="heroSub">11,000+ channels from 180+ countries — news, sport, movies and more. No signup, no subscription.</p>
+      <div class="hero-meta" id="heroMeta"></div>
+      <div class="hero-actions">
+        <button class="btn btn-play" id="heroPlay">
+          <svg viewBox="0 0 24 24" class="ico"><path d="M8 5v14l11-7z"/></svg> Play
+        </button>
+        <button class="btn btn-ghost" id="heroInfo">
+          <svg viewBox="0 0 24 24" class="ico"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm1 15h-2v-6h2zm0-8h-2V7h2z"/></svg> More Info
+        </button>
       </div>
     </div>
-    <div id="status" class="status"></div>
-    <div class="grid" id="channelGrid"></div>
-    <p id="emptyMsg" class="empty-msg" hidden>No channels match your filters.</p>
-    <div id="sentinel" class="sentinel" hidden></div>
-  </main>
-
-  <!-- Player panel -->
-  <section class="player-panel" id="playerPanel" aria-hidden="true">
-    <div class="player-panel-header">
-      <button id="playerClose" class="icon-btn" aria-label="Close player">✕</button>
-      <div class="now-playing" id="nowPlaying">
-        <div class="np-flag" id="npFlag"></div>
-        <div>
-          <div class="np-name" id="npName"></div>
-          <div class="np-meta" id="npMeta"></div>
-        </div>
-        <div class="np-controls">
-          <button id="npFav" class="icon-btn" title="Add to favorites">☆</button>
-          <button id="npFullscreen" class="icon-btn" title="Fullscreen">⛶</button>
-        </div>
-      </div>
-    </div>
-    <div class="player-wrap">
-      <div class="player-aspect" id="playerAspect">
-        <video id="player" playsinline muted controls poster=""></video>
-        <div id="playerLoading" class="player-loading"><span>Loading stream…</span></div>
-        <div id="playerError" class="player-error hidden">
-          <div class="player-error-msg"></div>
-          <div class="mirrors" id="npMirrors"></div>
-          <button id="retryPlayer" class="btn btn-outline">Retry</button>
-        </div>
-      </div>
-      <div class="player-meta">
-        <div class="mirror-row">
-          <span class="mirror-label">Stream mirrors</span>
-          <div class="mirror-list" id="mirrorList"></div>
-        </div>
-        <div class="stream-info" id="streamInfo"></div>
-      </div>
-    </div>
-    <div class="player-hint" id="playerHint" hidden></div>
   </section>
-</div>
 
-<template id="channelTpl">
-  <div class="channel-card" role="button" tabindex="0" aria-label="">
-    <div class="card-flag"></div>
-    <div class="card-body">
-      <div class="card-name"></div>
-      <div class="card-meta"></div>
+  <!-- SEARCH RESULTS (replaces rails when searching) -->
+  <section class="results" id="results" hidden>
+    <div class="section-head">
+      <h2 id="resultsTitle">Results</h2>
+      <span class="muted" id="resultsCount"></span>
     </div>
-    <div class="card-quality"></div>
-    <button class="card-fav" title="Add to favorites">☆</button>
+    <div class="grid" id="resultsGrid"></div>
+    <div class="sentinel" id="resultsSentinel"></div>
+  </section>
+
+  <!-- HOME RAILS -->
+  <div id="rails">
+
+    <!-- Continue watching -->
+    <section class="rail" id="recentRail" hidden>
+      <div class="rail-head"><h2>Continue watching</h2></div>
+      <div class="rail-scroll" id="recentScroll"></div>
+    </section>
+
+    <!-- Featured -->
+    <section class="rail">
+      <div class="rail-head">
+        <h2>Featured live</h2>
+        <span class="rail-sub">Hand-picked global channels</span>
+      </div>
+      <div class="rail-scroll rail-logo" id="featuredScroll"></div>
+    </section>
+
+    <!-- Categories (filter chips) -->
+    <section class="chips-row">
+      <div class="chips" id="chips"></div>
+    </section>
+
+    <!-- Trending -->
+    <section class="rail">
+      <div class="rail-head">
+        <h2>Trending now</h2>
+        <span class="rail-sub">HD channels people are watching</span>
+      </div>
+      <div class="rail-scroll rail-logo" id="trendingScroll"></div>
+    </section>
+
+    <!-- Countries -->
+    <section class="rail">
+      <div class="rail-head"><h2>Browse by country</h2></div>
+      <div class="rail-scroll rail-country" id="countryRail"></div>
+    </section>
+
+    <!-- Per-country rails injected here -->
+    <div id="countryRails"></div>
   </div>
-</template>
+
+  <!-- Favorites / browse-all view -->
+  <section class="results" id="browse" hidden>
+    <div class="section-head">
+      <button class="back-btn" id="browseBack" aria-label="Back">←</button>
+      <h2 id="browseTitle">All channels</h2>
+      <span class="muted" id="browseCount"></span>
+    </div>
+    <div class="grid" id="browseGrid"></div>
+    <div class="sentinel" id="browseSentinel"></div>
+    <p class="empty-msg" id="browseEmpty" hidden>Nothing here yet.</p>
+  </section>
+
+  <footer class="foot">
+    <p>FreeTV — no signup, no subscription. Streams are provided by the public
+      <a href="https://github.com/iptv-org/iptv" target="_blank" rel="noopener">iptv-org</a> playlist and hosted by third parties.
+      Some channels are region-locked or offline.</p>
+  </footer>
+</main>
+
+<!-- ============ BOTTOM NAV (mobile) ============ -->
+<nav class="bottomnav" id="bottomnav">
+  <button class="bnav active" data-nav="home">
+    <svg viewBox="0 0 24 24" class="ico"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg><span>Home</span>
+  </button>
+  <button class="bnav" data-nav="search">
+    <svg viewBox="0 0 24 24" class="ico"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg><span>Search</span>
+  </button>
+  <button class="bnav" data-nav="browse">
+    <svg viewBox="0 0 24 24" class="ico"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg><span>Browse</span>
+  </button>
+  <button class="bnav" data-nav="favorites">
+    <svg viewBox="0 0 24 24" class="ico"><path d="M12 2l2.9 6.3 6.6.8-4.8 4.7 1.2 6.6L12 17.8 6.1 20.4l1.2-6.6L2.5 9.1l6.6-.8z"/></svg><span>Favorites</span>
+  </button>
+</nav>
+
+<!-- ============ PLAYER (full-screen overlay) ============ -->
+<div class="player" id="player" aria-hidden="true">
+  <div class="player-top">
+    <button class="player-close" id="playerClose" aria-label="Close player">
+      <svg viewBox="0 0 24 24" class="ico"><path d="M19 6.4L17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
+    </button>
+    <div class="player-heading">
+      <h3 id="npName">—</h3>
+      <p id="npMeta"></p>
+    </div>
+    <button class="player-fav" id="npFav" aria-label="Favorite">☆</button>
+  </div>
+
+  <div class="player-stage" id="playerStage">
+    <video id="video" playsinline controls></video>
+    <div class="player-loading" id="playerLoading">
+      <div class="spinner"></div>
+      <p id="loadingText">Connecting…</p>
+    </div>
+    <div class="player-error" id="playerError" hidden>
+      <p id="playerErrorMsg"></p>
+      <div class="player-error-actions">
+        <button class="btn btn-play" id="retryBtn">Try again</button>
+        <button class="btn btn-ghost" id="nextMirrorBtn">Next stream</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="player-foot">
+    <div class="mirrors" id="mirrors"></div>
+    <div class="player-chips" id="playerChips"></div>
+  </div>
+
+  <!-- Up next rail inside the player -->
+  <div class="up-next" id="upNext">
+    <div class="up-next-head"><h4>More like this</h4></div>
+    <div class="up-next-scroll rail-logo" id="upNextScroll"></div>
+  </div>
+</div>
 
 <script src="js/vendor/hls.js"></script>
 <script src="js/app.js"></script>

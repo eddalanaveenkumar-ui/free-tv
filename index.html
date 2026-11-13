@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#0b1021" />
 <title>Free TV — Watch Free Live TV Channels from Around the World</title>
 <meta name="description" content="14,000+ free live TV channels from 180+ countries. News, sports, movies, music and more — powered by iptv-org." />
 <link rel="stylesheet" href="css/style.css" />
@@ -17,11 +18,11 @@
     <div class="search-wrap" role="search" aria-label="Search channels">
       <span class="search-icon">🔍</span>
       <input type="search" id="searchInput" placeholder="Search channels (e.g. CNN, BBC, India…)" autocapitalize="off" autocomplete="off" />
-      <span class="search-clear" id="searchClear" title="Clear">×</span>
+      <button type="button" class="search-clear" id="searchClear" title="Clear search" aria-label="Clear search">×</button>
     </div>
     <div class="header-meta">
       <span id="metaBadge" class="badge">Loading…</span>
-      <button id="toggleSidebar" class="icon-btn" aria-label="Toggle filters"><span>☰</span></button>
+      <button id="toggleSidebar" class="icon-btn" aria-label="Toggle filters" aria-controls="sidebar" aria-expanded="false"><span>☰</span></button>
     </div>
   </div>
 </header>
@@ -51,8 +52,8 @@
         Streams are provided by the public <a href="https://github.com/iptv-org/iptv" target="_blank" rel="noopener">iptv-org</a> playlist. Some channels are HTTP-only and may not play when the site is served over HTTPS.
       </div>
     </div>
-    <div class="sidebar-overlay" id="sidebarOverlay"></div>
   </aside>
+  <div class="sidebar-overlay" id="sidebarOverlay" aria-hidden="true"></div>
 
   <!-- Main: channel grid -->
   <main class="main">

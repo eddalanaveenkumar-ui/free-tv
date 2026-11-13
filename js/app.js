@@ -207,6 +207,7 @@
     renderFilters();
     renderChannels();
     pushFilterUrl();
+    if (window.innerWidth < 1200) closeSidebar();
   }
 
   // --- Render channels ---
@@ -281,7 +282,7 @@
     updateNpFav();
     if (els.playerPanel.classList.contains('open') === false) els.playerPanel.classList.add('open');
     els.playerPanel.setAttribute('aria-hidden', 'false');
-    if (window.innerWidth <= 899) els.playerPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // The responsive player is a fixed drawer/bottom sheet; do not scroll the page behind it.
     loadStream(currentMirrors[mirrorIndex]);
     if (history.state && history.state.channelId === ch.id) {} else {
       history.replaceState({ channelId: ch.id }, '', location.pathname + (location.search ? location.search : '') + '#' + ch.id);
@@ -587,19 +588,32 @@
     els.viewGrid.onclick = () => setView('grid');
     els.viewList.onclick = () => setView('list');
 
-    // Sidebar toggles
-    els.toggleSidebar.onclick = () => els.sidebar.classList.toggle('open');
-    els.sidebarClose.onclick = () => els.sidebar.classList.remove('open');
-    els.sidebarOverlay.onclick = () => els.sidebar.classList.remove('open');
+    // Responsive filter drawer: keep the scrim and accessibility state in sync.
+    els.toggleSidebar.onclick = () => {
+      const shouldOpen = !els.sidebar.classList.contains('open');
+      els.sidebar.classList.toggle('open', shouldOpen);
+      els.sidebarOverlay.classList.toggle('open', shouldOpen);
+      els.toggleSidebar.setAttribute('aria-expanded', String(shouldOpen));
+    };
+    els.sidebarClose.onclick = closeSidebar;
+    els.sidebarOverlay.onclick = closeSidebar;
 
-    // Clicking player panel header area outside video closes nothing; video clicks toggle loading only
+    // Close the active overlay with Escape on touch and desktop keyboards.
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         if (document.fullscreenElement) document.exitFullscreen();
-        else if (window.innerWidth <= 899 && els.playerPanel.classList.contains('open')) els.playerPanel.classList.remove('open');
-        else els.sidebar.classList.remove('open');
+        else if (els.playerPanel.classList.contains('open')) {
+          els.playerPanel.classList.remove('open');
+          els.playerPanel.setAttribute('aria-hidden', 'true');
+        } else closeSidebar();
       }
     });
+  }
+
+  function closeSidebar() {
+    els.sidebar.classList.remove('open');
+    els.sidebarOverlay.classList.remove('open');
+    els.toggleSidebar.setAttribute('aria-expanded', 'false');
   }
 
   function setView(mode) {

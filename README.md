@@ -20,6 +20,22 @@ https://free-tv.vercel.app (if deployed)
 - Channel data generated from `iptv-org/iptv` country playlists (`streams/*.m3u`)
 - Deployable on Vercel, Netlify, GitHub Pages, or any static host
 
+## Data layout
+
+| File | Size | Purpose |
+|---|---|---|
+| `public/data/catalog.json` | ~900 KB | Compact index (id, name, country, category, quality) loaded on first paint |
+| `public/data/ch/<CC>.json` | 0.4–400 KB | Full records incl. stream mirrors, fetched only when a channel is played |
+| `public/data/countries.json` | 17 KB | Country names, flags, counts |
+| `public/data/categories.json` | 0.4 KB | Category names and counts |
+
+## Performance notes
+
+- Channel grid renders incrementally (60 cards per page) via `IntersectionObserver` — never 14k nodes at once.
+- Stream mirrors are probed in parallel and ordered fastest-first before playback.
+- `http://`-only mirrors are skipped on HTTPS pages instead of retried, since browsers block mixed content.
+- Each mirror attempt has a 9s budget with autoplay-sound fallback (muted play + tap-for-sound).
+
 ## Local development
 
 ```bash

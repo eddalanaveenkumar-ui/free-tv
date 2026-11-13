@@ -60,7 +60,7 @@
   let mirrorIndex = 0;
   let playbackTimer = null;
   let playbackAttempt = 0;
-  const PLAYBACK_TIMEOUT_MS = 18000;
+  const PLAYBACK_TIMEOUT_MS = 12000;
 
   // --- Parse initial filters from URL query ---
   function initFiltersFromUrl() {
@@ -313,9 +313,11 @@
     els.playerError.classList.remove('hidden');
   }
 
-  function failCurrentMirror(reason) {
-    // Ignore callbacks from a previous channel/mirror attempt.
-    const failedAttempt = playbackAttempt;
+  function failCurrentMirror(reason, expectedAttempt = playbackAttempt) {
+    // A rejected play() promise from an older channel must never fail the
+    // currently selected channel or advance its mirror index.
+    if (expectedAttempt !== playbackAttempt) return;
+
     clearPlaybackTimer();
     destroyHls();
 
@@ -327,13 +329,50 @@
       return;
     }
 
-    const isSecure = location.protocol === 'https:';
-    const hasHttpMirror = currentMirrors.some((url) => /^http:\/\//i.test(url));
-    const prefix = isSecure && hasHttpMirror
-      ? 'Some mirrors use HTTP and are blocked as mixed content on this HTTPS site. '
+    const hasHttpMirror = currentMirrors.some((mirror) => /^http:\/\//i.test(mirror));
+    const prefix = location.protocol === 'https:' && hasHttpMirror
+      ? 'Some mirrors use HTTP and are blocked by browsers on this HTTPS site. '
       : '';
-    showPlaybackError(prefix + (reason || 'Unable to start playback.') + ' No more mirrors are available. Try Retry to check the streams again.');
-    console.error('All stream mirrors failed for the selected channel.', { failedAttempt, reason });
+    showPlaybackError(prefix + (reason || 'Unable to start playback.') + ' No more mirrors are available. Try another channel or retry.');
+    console.error('All stream mirrors failed for the selected channel.', { reason });
+  }
+
+  function requestPlayback(video, attempt) {
+    if (attempt !== playbackAttempt) return;
+    let playRequest;
+    try {
+      playRequest = video.play();
+    } catch (error) {
+      if (attempt === playbackAttempt) failCurrentMirror(`Playback could not start: ${error.message || error}.`, attempt);
+      return;
+    }
+
+    if (playRequest && typeof playRequest.catch === 'function') {
+      playRequest.catch((error) => {
+        // loadStream() intentionally pauses/resets the element when the user
+        // changes channels. Browsers reject the previous play() promise with
+        // AbortError in that case; it is not a failed mirror.
+        if (attempt !== playbackAttempt || (error && error.name === 'AbortError')) return;
+
+        if (error && error.name === 'NotAllowedError') {
+          const hint = els.playerLoading.querySelector('span');
+          if (hint) hint.textContent = 'Autoplay was blocked — press Play to start this channel.';
+          els.playerLoading.classList.remove('hidden');
+          return;
+        }
+
+        failCurrentMirror(`Playback could not start: ${error.message || error}.`, attempt);
+      });
+    }
+  }
+
+  function isShortenedUrl(url) {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return ['goo.gl', 'bit.ly', 'tinyurl.com', 't.co', 'is.gd', 'ow.ly'].includes(host);
+    } catch (_) {
+      return false;
+    }
   }
 
   function loadStream(url) {
@@ -342,24 +381,27 @@
       return;
     }
 
+    // Invalidate the previous attempt before pausing/loading the media element.
+    // Any old play() promise rejection will now be recognized as stale.
     clearPlaybackTimer();
+    playbackAttempt += 1;
+    const attempt = playbackAttempt;
     destroyHls();
-    const attempt = ++playbackAttempt;
-    const video = els.player;
 
+    const video = els.player;
     els.playerError.classList.add('hidden');
     els.playerLoading.classList.remove('hidden');
-    els.player.setAttribute('poster', '');
+    const loadingLabel = els.playerLoading.querySelector('span');
+    if (loadingLabel) loadingLabel.textContent = 'Connecting to stream…';
     els.streamInfo.textContent = '';
     renderMirrorButtons();
 
-    // Reset native media handlers before attaching handlers for this attempt.
+    video.pause();
     video.onplaying = null;
     video.onerror = null;
     video.onloadedmetadata = null;
     video.onstalled = null;
     video.onwaiting = null;
-    video.pause();
     video.removeAttribute('src');
     video.load();
 
@@ -369,9 +411,7 @@
     const HlsLibrary = window.Hls;
 
     if (isSecure && isHttp) {
-      // Browsers block active mixed content; attempting playback only leaves
-      // the user waiting until a media error/timeout fires.
-      failCurrentMirror('This mirror uses HTTP, which browsers block on HTTPS pages.');
+      failCurrentMirror('This mirror uses HTTP, which browsers block on HTTPS pages.', attempt);
       return;
     }
 
@@ -385,30 +425,31 @@
     video.onerror = () => {
       if (attempt !== playbackAttempt) return;
       const mediaError = video.error;
-      const detail = mediaError
+      let detail = mediaError
         ? `Media error ${mediaError.code}${mediaError.message ? ': ' + mediaError.message : ''}.`
         : 'The browser could not load this stream.';
-      failCurrentMirror(detail);
+      if (isShortenedUrl(url)) {
+        detail = 'This channel uses a shortened link. The player needs a direct .m3u8 or supported media URL; the redirect target cannot be inspected by the browser.';
+      }
+      failCurrentMirror(detail, attempt);
     };
 
     video.onstalled = () => {
       if (attempt === playbackAttempt) console.warn('Stream stalled:', url);
     };
 
-    // A timeout covers servers that never send a manifest/metadata or never
-    // transition to playing. It also guarantees the loading overlay is removed.
     playbackTimer = setTimeout(() => {
       if (attempt === playbackAttempt) {
-        failCurrentMirror(`Stream timed out after ${PLAYBACK_TIMEOUT_MS / 1000} seconds.`);
+        failCurrentMirror(`No playback started within ${PLAYBACK_TIMEOUT_MS / 1000} seconds.`, attempt);
       }
     }, PLAYBACK_TIMEOUT_MS);
 
     if (isHls && HlsLibrary && HlsLibrary.isSupported()) {
       hls = new HlsLibrary({
         enableWorker: true,
-        manifestLoadingTimeOut: 10000,
-        levelLoadingTimeOut: 12000,
-        fragLoadingTimeOut: 15000,
+        manifestLoadingTimeOut: 8000,
+        levelLoadingTimeOut: 10000,
+        fragLoadingTimeOut: 12000,
         manifestLoadingMaxRetry: 1,
         levelLoadingMaxRetry: 1,
         fragLoadingMaxRetry: 1
@@ -418,35 +459,24 @@
         if (attempt !== playbackAttempt) return;
         console.error('HLS playback error:', data);
         if (data.fatal) {
-          failCurrentMirror(`HLS error: ${data.details || data.type || 'fatal playback error'}.`);
+          failCurrentMirror(`HLS error: ${data.details || data.type || 'fatal playback error'}.`, attempt);
         }
       });
 
       hls.on(HlsLibrary.Events.MANIFEST_PARSED, () => {
-        if (attempt !== playbackAttempt) return;
-        video.play().catch((error) => {
-          // Muted playback is normally allowed, but surface a useful failure
-          // and try the next mirror if the browser rejects playback.
-          failCurrentMirror(`Playback could not start: ${error.message || error}.`);
-        });
+        if (attempt === playbackAttempt) requestPlayback(video, attempt);
       });
 
       hls.loadSource(url);
       hls.attachMedia(video);
     } else if (isHls && video.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari and other browsers with native HLS support.
       video.src = url;
-      video.play().catch((error) => {
-        if (attempt === playbackAttempt) failCurrentMirror(`Playback could not start: ${error.message || error}.`);
-      });
+      requestPlayback(video, attempt);
     } else if (!isHls) {
-      // Native MP4/other browser-supported media.
       video.src = url;
-      video.play().catch((error) => {
-        if (attempt === playbackAttempt) failCurrentMirror(`Playback could not start: ${error.message || error}.`);
-      });
+      requestPlayback(video, attempt);
     } else {
-      failCurrentMirror('HLS playback is not supported in this browser. The HLS.js library could not be initialized.');
+      failCurrentMirror('HLS is not supported in this browser because the HLS.js library did not load.', attempt);
     }
 
     if (isSecure && currentMirrors.some((mirror) => /^http:\/\//i.test(mirror))) {
@@ -458,9 +488,9 @@
 
   function handleStreamError(isSecure, isHttp) {
     const message = isSecure && isHttp
-      ? 'This stream is HTTP-only and browsers block HTTP content on HTTPS sites.'
+      ? 'This stream is HTTP-only and browsers block it on HTTPS sites.'
       : 'This stream is not playing.';
-    failCurrentMirror(message);
+    failCurrentMirror(message, playbackAttempt);
   }
 
   function renderMirrorButtons() {
@@ -549,6 +579,7 @@
     clearPlaybackTimer();
     playbackAttempt += 1;
     destroyHls();
+    els.player.pause();
     els.player.src = '';
     els.player.load();
     els.playerLoading.classList.add('hidden');

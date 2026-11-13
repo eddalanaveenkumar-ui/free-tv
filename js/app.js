@@ -88,7 +88,8 @@ let current = null;
 let mirrors = [];
 let mirrorIndex = 0;
 let hls = null;
-let attemptId = 0;
+let attemptId = 0;        // bumps when a different channel is opened
+let playId = 0;           // bumps every stream switch inside the same channel
 let isOpen = false;
 let heroTimer = null;
 
@@ -561,6 +562,7 @@ function openPlayer(ch) {
 function closePlayer() {
   isOpen = false;
   attemptId++;
+  playId++;
   destroyHls();
   el.video.pause();
   el.video.removeAttribute('src');
@@ -569,6 +571,28 @@ function closePlayer() {
   el.player.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('playing');
   history.replaceState(null, '', location.pathname + location.search);
+}
+
+// Autoplay is often blocked with sound. Try unmuted, fall back to muted.
+// Every await re-checks that we are still the active playback request — a
+// previous stream's play() promise can resolve after the user switched.
+async function playVideo(isCurrent) {
+  const v = el.video;
+  if (!isCurrent()) return false;
+  try {
+    v.muted = false;
+    await v.play();
+    return isCurrent();
+  } catch (err) {
+    if (!isCurrent() || (err && err.name === 'AbortError')) return false;
+    try {
+      v.muted = true;
+      await v.play();
+      return isCurrent();
+    } catch (e2) {
+      return false;
+    }
+  }
 }
 
 function destroyHls() {
@@ -613,6 +637,7 @@ async function startPlayback(index, myAttempt) {
   }
   mirrorIndex = Math.min(index, usable.length - 1);
   const url = usable[mirrorIndex];
+  const myPlay = ++playId;
 
   destroyHls();
   el.playerError.hidden = true;
@@ -655,9 +680,11 @@ async function startPlayback(index, myAttempt) {
     });
     hls.loadSource(url);
     hls.attachMedia(v);
+    const isCurrent = () => playId === myPlay;
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
       clearInterval(restart);
-      v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+      if (!isCurrent()) return;
+      playVideo(isCurrent);
     });
     hls.on(Hls.Events.ERROR, (_e, data) => {
       if (!data.fatal || myAttempt !== attemptId) return;
@@ -686,7 +713,7 @@ async function startPlayback(index, myAttempt) {
       if (mirrorIndex + 1 < use.length) startPlayback(mirrorIndex + 1, ++attemptId);
       else failPlayer('This stream can\'t be played in your browser. Try another channel.');
     }, { once: true });
-    v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+    playVideo(() => playId === myPlay);
   }
 }
 

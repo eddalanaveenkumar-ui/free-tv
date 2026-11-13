@@ -10,6 +10,7 @@
     countText: document.getElementById('countText'),
     viewTitle: document.getElementById('viewTitle'),
     emptyMsg: document.getElementById('emptyMsg'),
+    sentinel: document.getElementById('sentinel'),
     searchInput: document.getElementById('searchInput'),
     searchClear: document.getElementById('searchClear'),
     categoryPills: document.getElementById('categoryPills'),
@@ -55,9 +56,10 @@
   let viewMode = 'grid'; // grid | list
   let favorites = new Set();
   let current = null;
-  let hls = null;
   let currentMirrors = [];
-  let mirrorIndex = 0;
+  let channelsById = new Map();
+  let countryByCode = new Map();
+  let streamWatchdog = null;
 
   // --- Parse initial filters from URL query ---
   function initFiltersFromUrl() {
@@ -83,32 +85,76 @@
   }
 
   // --- Data loading ---
+  // Compact catalog row -> channel object (streams loaded lazily)
+  // row = [id, name, countryCode, category, quality]
+  function expandRow(row) {
+    const [id, name, countryCode, category, quality] = row;
+    const countryMeta = countryByCode.get(countryCode);
+    return {
+      id, name, countryCode, category, quality,
+      country: countryMeta ? countryMeta.name : countryCode,
+      flag: countryMeta ? countryMeta.flag : '🌍',
+      mirrors: null // lazy
+    };
+  }
+
   async function loadData() {
-    setStatus('Loading channel list…', 'info');
-    try {
-      const [indexRes, channelsRes, countriesRes, categoriesRes] = await Promise.all([
-        fetch(`${DATA_DIR}/index.json`),
-        fetch(`${DATA_DIR}/channels.json`),
-        fetch(`${DATA_DIR}/countries.json`),
-        fetch(`${DATA_DIR}/categories.json`)
-      ]);
-      const index = await indexRes.json();
-      channels = await channelsRes.json();
-      countries = await countriesRes.json();
-      categories = await categoriesRes.json();
+    const [indexData, catalogData, countriesData, categoriesData] = await Promise.all([
+      fetchJSON(`${DATA_DIR}/index.json`),
+      fetchJSON(`${DATA_DIR}/catalog.json`),
+      fetchJSON(`${DATA_DIR}/countries.json`),
+      fetchJSON(`${DATA_DIR}/categories.json`)
+    ]);
 
-      els.metaBadge.textContent = `${index.total} channels • ${index.countries} countries`;
-      els.metaBadge.className = 'badge';
+    countries = countriesData;
+    categories = categoriesData;
+    countryByCode = new Map(countries.map(c => [c.code, c]));
 
-      loadFavorites();
-      renderFilters();
-      renderChannels();
-      initPlayerEvents();
-      maybePlayFromUrl();
-    } catch (err) {
-      setStatus('Failed to load channel data.', 'warn');
-      console.error(err);
+    // Build the in-memory index of all channels from compact rows (~900 KB)
+    channels = catalogData.map(expandRow);
+    channelsById = new Map(channels.map(c => [c.id, c]));
+
+    els.metaBadge.textContent = `${indexData.total} channels • ${indexData.countries} countries`;
+
+    loadFavorites();
+    renderFilters();
+    renderChannels();
+    initPlayerEvents();
+    maybePlayFromUrl();
+  }
+
+  async function fetchJSON(url) {
+    const res = await fetch(url, { cache: 'force-cache' });
+    if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // Lazily fetch full channel records (with stream URLs) for one country
+  const countryDataPromises = new Map();
+  async function ensureCountryChannels(code) {
+    if (!countryDataPromises.has(code)) {
+      const p = fetchJSON(`${DATA_DIR}/ch/${code}.json`)
+        .then(list => {
+          for (const full of list) {
+            const ch = channelsById.get(full.id);
+            if (ch) {
+              const all = [full.url, ...(full.mirrors || [])].filter(Boolean);
+              ch.mirrors = [...new Set(all)];
+            }
+          }
+          return list;
+        })
+        .catch(err => { countryDataPromises.delete(code); throw err; });
+      countryDataPromises.set(code, p);
     }
+    return countryDataPromises.get(code);
+  }
+
+  async function ensureChannelStreams(ch) {
+    if (ch.mirrors && ch.mirrors.length) return ch.mirrors;
+    await ensureCountryChannels(ch.countryCode);
+    if (!ch.mirrors || !ch.mirrors.length) throw new Error('No playable stream');
+    return ch.mirrors;
   }
 
   function setStatus(msg, type) {
@@ -225,63 +271,330 @@
     return true;
   }
 
-  function renderChannels() {
-    const list = channels.filter(matchesFilters);
-    els.countText.textContent = `${list.length} channel${list.length === 1 ? '' : 's'}`;
-    els.viewTitle.textContent = filters.favorites ? 'Favorites'
-      : (filters.country ? countries.find(c => c.code === filters.country)?.name || filters.country
-        : filters.category === 'All' ? 'All Channels' : filters.category);
-    els.emptyMsg.hidden = list.length > 0;
+  // --- Incremental rendering (only ~120 cards in the DOM at a time) ---
+  const PAGE_SIZE = 60;
+  let filteredList = [];
+  let renderedCount = 0;
+  let sentinelObserver = null;
 
+  function cardFor(ch) {
+    const card = document.createElement('div');
+    card.className = 'channel-card';
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
+    card.setAttribute('aria-label', `${ch.name}, ${ch.country}`);
+    card.dataset.id = ch.id;
+    card.innerHTML =
+      `<div class="card-flag">${ch.flag}</div>
+       <div class="card-body">
+         <div class="card-name">${escapeHtml(ch.name)}</div>
+         <div class="card-meta">${escapeHtml(ch.country)}${ch.category !== 'General' ? ' • ' + escapeHtml(ch.category) : ''}${ch.quality ? ' • ' + ch.quality : ''}</div>
+       </div>
+       <div class="card-quality">${ch.quality || ''}</div>
+       <button class="card-fav ${isFav(ch.id) ? 'on' : ''}" data-id="${escapeHtmlAttr(ch.id)}" title="${isFav(ch.id) ? 'Remove from favorites' : 'Add to favorites'}">${isFav(ch.id) ? '★' : '☆'}</button>`;
+    card.onclick = (e) => { if (e.target.classList.contains('card-fav')) return; selectChannel(ch); };
+    card.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectChannel(ch); } };
+    card.querySelector('.card-fav').onclick = (e) => { e.stopPropagation(); toggleFav(ch.id); };
+    return card;
+  }
+
+  function appendPage() {
+    if (renderedCount >= filteredList.length) return;
+    const slice = filteredList.slice(renderedCount, renderedCount + PAGE_SIZE);
     const frag = document.createDocumentFragment();
-    const isList = viewMode === 'list';
-    if (isList) els.grid.classList.add('list'); else els.grid.classList.remove('list');
-
-    for (const ch of list) {
-      const card = document.createElement('div');
-      card.className = 'channel-card';
-      card.setAttribute('role', 'button');
-      card.setAttribute('tabindex', '0');
-      card.setAttribute('aria-label', `${ch.name}, ${ch.country}`);
-      card.dataset.id = ch.id;
-      card.innerHTML =
-        `<div class="card-flag">${ch.flag}</div>
-         <div class="card-body">
-           <div class="card-name">${escapeHtml(ch.name)}</div>
-           <div class="card-meta">${escapeHtml(ch.country)} ${ch.category !== 'General' ? '• ' + escapeHtml(ch.category) : ''}${ch.quality ? ' • ' + ch.quality : ''}</div>
-         </div>
-         <div class="card-quality">${ch.quality || ''}</div>
-         <button class="card-fav ${isFav(ch.id) ? 'on' : ''}" data-id="${escapeHtmlAttr(ch.id)}" title="${isFav(ch.id) ? 'Remove from favorites' : 'Add to favorites'}">${isFav(ch.id) ? '★' : '☆'}</button>`;
-      card.onclick = (e) => { if (e.target.classList.contains('card-fav')) return; selectChannel(ch); };
-      card.ondblclick = (e) => { if (e.target.classList.contains('card-fav')) return; selectChannel(ch); toggleFullscreen(); };
-      card.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectChannel(ch); } };
-      card.querySelector('.card-fav').onclick = (e) => { e.stopPropagation(); toggleFav(ch.id); };
-      frag.appendChild(card);
-    }
-    els.grid.innerHTML = '';
+    for (const ch of slice) frag.appendChild(cardFor(ch));
     els.grid.appendChild(frag);
+    renderedCount += slice.length;
+    els.emptyMsg.hidden = filteredList.length > 0;
+    els.sentinel.hidden = renderedCount >= filteredList.length;
+  }
+
+  function renderChannels() {
+    filteredList = channels.filter(matchesFilters);
+    els.countText.textContent = `${filteredList.length.toLocaleString()} channel${filteredList.length === 1 ? '' : 's'}`;
+    els.viewTitle.textContent = filters.favorites ? 'Favorites'
+      : (filters.country ? (countryByCode.get(filters.country)?.name || filters.country)
+        : filters.category === 'All' ? 'All Channels' : filters.category);
+    els.grid.classList.toggle('list', viewMode === 'list');
+
+    els.grid.innerHTML = '';
+    renderedCount = 0;
+    els.emptyMsg.hidden = filteredList.length > 0;
+    appendPage();               // first screen paints immediately
+    setupSentinel();
+  }
+
+  function setupSentinel() {
+    if (sentinelObserver) sentinelObserver.disconnect();
+    sentinelObserver = new IntersectionObserver((entries) => {
+      if (entries.some(e => e.isIntersecting)) appendPage();
+    }, { rootMargin: '600px' });
+    sentinelObserver.observe(els.sentinel);
   }
 
   function escapeHtmlAttr(s) {
     return String(s).replace(/"/g, '&quot;');
   }
 
-  // --- Player ---
-  function selectChannel(ch) {
+  // --- Player: sequential fast-failover across mirrors ---
+  let activeHls = null;
+  let attemptToken = 0;          // invalidates callbacks from stale attempts
+  let winningIndex = null;
+
+  function teardownPlayer() {
+    attemptToken++;              // kill any in-flight callbacks
+    if (activeHls) { try { activeHls.destroy(); } catch (_) {} activeHls = null; }
+    const v = els.player;
+    v.onloadedmetadata = null;
+    v.onerror = null;
+    v.removeAttribute('src');
+    try { v.load(); } catch (_) {}
+  }
+
+  function setPlayingUI(index) {
+    els.playerLoading.classList.add('hidden');
+    els.playerError.classList.add('hidden');
+    els.streamInfo.textContent = currentMirrors.length > 1
+      ? `Playing stream ${index + 1} of ${currentMirrors.length}`
+      : '';
+    renderMirrorButtons();
+  }
+
+  // Try mirrors in order: each gets a short budget, then we move on.
+  async function playFromMirror(index, token) {
+    if (token !== attemptToken) return;
+    if (index >= currentMirrors.length) {
+      showStreamFailure();
+      return;
+    }
+    const url = currentMirrors[index];
+    winningIndex = null;
+    renderMirrorButtons();
+    els.streamInfo.textContent = currentMirrors.length > 1
+      ? `Connecting to stream ${index + 1} of ${currentMirrors.length}…`
+      : 'Connecting…';
+
+    const ok = await tryMirror(url, token);
+    if (token !== attemptToken) return;
+    if (ok) {
+      winningIndex = index;
+      setPlayingUI(index);
+    } else {
+      playFromMirror(index + 1, token);
+    }
+  }
+
+  // Browsers block autoplay with sound. Try unmuted first (a click usually just
+  // happened), then fall back to muted playback and offer an unmute button.
+  function unmuteUi(show) {
+    let btn = document.getElementById('unmuteBtn');
+    if (!show) { if (btn) btn.remove(); return; }
+    if (btn) return;
+    btn = document.createElement('button');
+    btn.id = 'unmuteBtn';
+    btn.className = 'unmute-btn';
+    btn.type = 'button';
+    btn.textContent = '🔊 Tap for sound';
+    btn.onclick = () => {
+      els.player.muted = false;
+      els.player.play().catch(() => {});
+      btn.remove();
+    };
+    document.getElementById('playerAspect').appendChild(btn);
+  }
+
+  async function safePlay(video) {
+    if (video.readyState >= 2 && !video.paused) { unmuteUi(video.muted); return true; }
+    try {
+      video.muted = false;
+      await video.play();
+      unmuteUi(false);
+      return true;
+    } catch (_) {
+      try {
+        video.muted = true;
+        await video.play();
+        unmuteUi(true);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+
+  // Returns true if this mirror started playing within the budget.
+  function tryMirror(url, token) {
+    return new Promise(resolve => {
+      const video = els.player;
+      const isHlsUrl = /\.m3u8(\?|$)/i.test(url);
+      const isHttp = url.startsWith('http://');
+      const useHlsJs = isHlsUrl && typeof Hls !== 'undefined' && Hls.isSupported();
+
+      // HTTP streams on an HTTPS page are blocked outright — don't waste time.
+      if (location.protocol === 'https:' && isHttp) { resolve(false); return; }
+
+      let settled = false;
+      let hls = null;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        video.removeEventListener('playing', onPlaying);
+        if (token !== attemptToken && ok) ok = false;
+        if (ok) {
+          if (hls) activeHls = hls;
+        } else {
+          if (hls) { try { hls.destroy(); } catch (_) {} }
+          if (activeHls === hls) activeHls = null;
+        }
+        resolve(ok);
+      };
+
+      const onPlaying = () => finish(true);
+
+      // Budget: 9s per mirror. Most live HLS starts in 1-3s or not at all.
+      const timer = setTimeout(() => finish(false), 9000);
+
+      // Reset element state from any previous mirror.
+      video.onloadedmetadata = null;
+      video.onerror = null;
+      video.removeAttribute('src');
+      try { video.load(); } catch (_) {}
+      video.addEventListener('playing', onPlaying, { once: true });
+
+      if (useHlsJs) {
+        hls = new Hls({
+          enableWorker: false,
+          manifestLoadingMaxRetry: 0,
+          levelLoadingMaxRetry: 0,
+          fragLoadingMaxRetry: 0,
+          manifestLoadingTimeOut: 6000,
+          levelLoadingTimeOut: 6000,
+          fragLoadingTimeOut: 8000
+        });
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (settled) return;
+          safePlay(video);
+        });
+        hls.on(Hls.Events.FRAG_BUFFERED, () => {
+          if (settled) return;
+          safePlay(video);
+          // Also accept having buffered data as success even if autoplay is blocked.
+          setTimeout(() => { if (!settled && video.readyState >= 2) finish(true); }, 250);
+        });
+        hls.on(Hls.Events.ERROR, (ev, data) => {
+          if (settled) return;
+          if (data && data.fatal) finish(false);
+        });
+      } else {
+        video.src = url;
+        video.onloadedmetadata = () => { if (!settled) safePlay(video); };
+        video.onerror = () => finish(false);
+        safePlay(video);
+      }
+    });
+  }
+
+  // Probe mirrors in parallel and return them ordered fastest-first.
+  // A no-cors fetch resolving means the host answered; rejecting means it's dead.
+  function probeMirror(url, ms) {
+    return new Promise(resolve => {
+      let done = false;
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const t = setTimeout(() => {
+        if (done) return;
+        done = true;
+        if (ctrl) ctrl.abort();
+        resolve(ms); // never answered -> worst rank
+      }, ms);
+      const end = (rank) => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        resolve(rank);
+      };
+      try {
+        fetch(url, { mode: 'no-cors', cache: 'no-store', signal: ctrl ? ctrl.signal : undefined })
+          .then(() => end(performance.now()))
+          .catch(() => end(ms));
+      } catch (_) { end(ms); }
+    });
+  }
+
+  async function orderMirrorsBySpeed(urls) {
+    const budgets = urls.map(u => probeMirror(u, 4000));
+    const ranks = await Promise.all(budgets);
+    const scored = urls.map((u, i) => ({ url: u, rank: ranks[i] }));
+    scored.sort((a, b) => a.rank - b.rank);
+    return scored.map(s => s.url);
+  }
+
+  function startPlayback(ch) {
+    teardownPlayer();
+    winningIndex = null;
+    els.playerError.classList.add('hidden');
+    els.playerLoading.classList.remove('hidden');
+    clearTimeout(streamWatchdog);
+    playFromMirror(0, attemptToken);
+    renderMirrorButtons();
+  }
+
+  async function selectChannel(ch) {
     current = ch;
     els.npFlag.textContent = ch.flag;
     els.npName.textContent = ch.name;
-    els.npMeta.textContent = `${ch.country} ${ch.category !== 'General' ? '• ' + ch.category : ''}${ch.quality ? ' • ' + ch.quality : ''}`;
-    currentMirrors = ch.mirrors.slice();
-    mirrorIndex = 0;
+    els.npMeta.textContent = `${ch.country}${ch.category !== 'General' ? ' • ' + ch.category : ''}${ch.quality ? ' • ' + ch.quality : ''}`;
     updateNpFav();
-    if (els.playerPanel.classList.contains('open') === false) els.playerPanel.classList.add('open');
+    els.playerPanel.classList.add('open');
     els.playerPanel.setAttribute('aria-hidden', 'false');
     if (window.innerWidth <= 899) els.playerPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    loadStream(currentMirrors[mirrorIndex]);
-    if (history.state && history.state.channelId === ch.id) {} else {
-      history.replaceState({ channelId: ch.id }, '', location.pathname + (location.search ? location.search : '') + '#' + ch.id);
+
+    teardownPlayer();
+    winningIndex = null;
+    currentMirrors = [];
+    els.playerError.classList.add('hidden');
+    els.playerLoading.classList.remove('hidden');
+    els.streamInfo.textContent = 'Resolving stream…';
+    renderMirrorButtons();
+    history.replaceState({ channelId: ch.id }, '', location.pathname + location.search + '#' + ch.id);
+
+    try {
+      const mirrors = await ensureChannelStreams(ch);
+      if (current !== ch) return;
+      // Browsers block http:// media on https:// pages -- never waste a retry on them.
+      const usable = location.protocol === 'https:'
+        ? mirrors.filter(u => u.startsWith('https://'))
+        : mirrors;
+      if (!usable.length) {
+        currentMirrors = mirrors;
+        els.playerHint.textContent = 'This channel only offers http:// streams, which browsers block on HTTPS pages. Open the site over http:// to watch it.';
+        els.playerHint.classList.remove('hidden');
+        showStreamFailure();
+        return;
+      }
+      currentMirrors = usable.slice(0, 6);
+      // Rank by responsiveness so the live mirror is used first.
+      els.streamInfo.textContent = `Checking ${currentMirrors.length} stream${currentMirrors.length > 1 ? 's' : ''}…`;
+      const ranked = await orderMirrorsBySpeed(currentMirrors);
+      if (current !== ch) return;
+      currentMirrors = ranked;
+      startPlayback(ch);
+    } catch (err) {
+      console.error(err);
+      if (current === ch) showStreamFailure();
     }
+  }
+
+  function showStreamFailure() {
+    els.playerLoading.classList.add('hidden');
+    const secureHttpOnly = location.protocol === 'https:' &&
+      currentMirrors.length > 0 && currentMirrors.every(u => u.startsWith('http://'));
+    els.playerErrorMsg.textContent = secureHttpOnly
+      ? 'These streams are HTTP-only, which browsers block on HTTPS pages. Open the site over http:// to watch this channel.'
+      : 'This channel is not responding right now. Free IPTV streams go down often — try another channel or one of the mirrors below.';
+    els.playerError.classList.remove('hidden');
   }
 
   function updateNpFav() {
@@ -289,89 +602,35 @@
     els.npFav.className = `icon-btn ${isFav(current.id) ? 'on' : ''}`;
   }
 
-  function loadStream(url) {
-    els.playerError.classList.add('hidden');
-    els.playerLoading.classList.remove('hidden');
-    els.player.setAttribute('poster', '');
-    els.streamInfo.textContent = '';
-    els.mirrorList.innerHTML = '';
-    renderMirrorButtons();
-
-    const isHls = url.includes('.m3u8');
-    const video = els.player;
-    video.addEventListener('playing', () => els.playerLoading.classList.add('hidden'), { once: true });
-
-    // cleanup previous hls
-    if (hls) { hls.destroy(); hls = null; }
-    video.removeAttribute('src');
-    video.load();
-
-    const isSecure = location.protocol === 'https:';
-    const isHttp = url.startsWith('http://');
-
-    if (isHls && Hls && Hls.isSupported() && video.canPlayType('application/vnd.apple.mpegurl') === '') {
-      // use hls.js
-      hls = new Hls({ enableWorker: false });
-      hls.loadSource(url);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { els.playerLoading.classList.add('hidden'); video.play().catch(() => {}); });
-      hls.on(Hls.Events.ERROR, (ev, data) => {
-        console.error('HLS error', data);
-        els.playerLoading.classList.add('hidden');
-        if (data.fatal) handleStreamError(isSecure, isHttp);
-      });
-    } else {
-      // native (mp4 or Safari HLS)
-      video.src = url;
-      els.playerLoading.classList.remove('hidden');
-      video.play().catch(() => {});
-      video.onloadedmetadata = () => { els.playerLoading.classList.add('hidden'); };
-      video.onerror = () => { els.playerLoading.classList.add('hidden'); handleStreamError(isSecure, isHttp); };
-    }
-
-    if (isSecure && isHttp) {
-      els.playerHint.classList.remove('hidden');
-    } else {
-      els.playerHint.classList.add('hidden');
-    }
-  }
-
-  function handleStreamError(isSecure, isHttp) {
-    let msg = 'Unable to play this stream. ';
-    if (isSecure && isHttp) msg = "This stream is HTTP-only and browsers block HTTP content on HTTPS sites. Try another mirror below.";
-    else msg = "This stream isn't playing. Try another mirror below.";
-    els.playerErrorMsg.textContent = msg;
-    els.playerError.classList.remove('hidden');
-  }
-
   function renderMirrorButtons() {
     els.mirrorList.innerHTML = '';
     currentMirrors.forEach((url, i) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.className = `mirror-btn ${i === mirrorIndex ? 'active' : ''}`;
+      btn.className = `mirror-btn ${i === winningIndex ? 'active' : ''}`;
       btn.title = url;
       btn.textContent = `Stream ${i + 1}`;
       btn.onclick = () => {
-        if (i === mirrorIndex) return;
-        mirrorIndex = i;
-        renderMirrorButtons();
-        loadStream(url);
+        if (i === winningIndex) return;
+        teardownPlayer();                 // bumps attemptToken
+        winningIndex = null;
+        els.playerError.classList.add('hidden');
+        els.playerLoading.classList.remove('hidden');
+        els.streamInfo.textContent = `Connecting to stream ${i + 1}…`;
+        playFromMirror(i, attemptToken);  // use the fresh token
       };
       els.mirrorList.appendChild(btn);
     });
-    const info = currentMirrors.length > 1 ? `${currentMirrors.length} mirror${currentMirrors.length > 1 ? 's' : ''} available` : '';
-    els.streamInfo.textContent = info;
   }
 
-  function playNextMirror() {
-    if (currentMirrors.length <= 1) return;
-    mirrorIndex = (mirrorIndex + 1) % currentMirrors.length;
-    renderMirrorButtons();
-    loadStream(currentMirrors[mirrorIndex]);
-  }
-
-  els.retryPlayer.onclick = () => playNextMirror();
+  els.retryPlayer.onclick = () => {
+    if (!current) return;
+    teardownPlayer();
+    winningIndex = null;
+    els.playerError.classList.add('hidden');
+    els.playerLoading.classList.remove('hidden');
+    playFromMirror(0, attemptToken);
+  };
 
   // --- Fullscreen ---
   function toggleFullscreen() {
@@ -422,9 +681,8 @@
   }
 
   function stopPlayer() {
-    if (hls) { hls.destroy(); hls = null; }
-    els.player.src = '';
-    els.player.load();
+    teardownPlayer();
+    winningIndex = null;
     els.playerLoading.classList.add('hidden');
     els.playerError.classList.add('hidden');
     current = null;
@@ -444,7 +702,12 @@
   }
 
   // --- Boot ---
-  loadData();
+  initFiltersFromUrl();
+  loadData().catch(err => {
+    console.error(err);
+    setStatus('Could not load the channel list. Check your connection and reload.', 'warn');
+    els.metaBadge.textContent = 'Offline';
+  });
 
   // expose for debug
   window.__freetv = { channels: () => channels, filters: () => filters, selectChannel };

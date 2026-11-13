@@ -282,7 +282,7 @@
     updateNpFav();
     if (els.playerPanel.classList.contains('open') === false) els.playerPanel.classList.add('open');
     els.playerPanel.setAttribute('aria-hidden', 'false');
-    if (window.innerWidth <= 899) els.playerPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // The responsive player is a fixed drawer/bottom sheet; do not scroll the page behind it.
     loadStream(currentMirrors[mirrorIndex]);
     if (history.state && history.state.channelId === ch.id) {} else {
       history.replaceState({ channelId: ch.id }, '', location.pathname + (location.search ? location.search : '') + '#' + ch.id);

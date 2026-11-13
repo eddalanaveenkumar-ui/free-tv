@@ -338,11 +338,14 @@
 
   // --- Player: sequential fast-failover across mirrors ---
   let activeHls = null;
-  let attemptToken = 0;          // invalidates callbacks from stale attempts
+  let attemptToken = 0;          // invalidates callbacks from stale channels
+  let mirrorAttemptToken = 0;    // invalidates stale mirror play() promises
   let winningIndex = null;
 
   function teardownPlayer() {
     attemptToken++;              // kill any in-flight callbacks
+    mirrorAttemptToken++;
+    unmuteUi(false);
     if (activeHls) { try { activeHls.destroy(); } catch (_) {} activeHls = null; }
     const v = els.player;
     v.onloadedmetadata = null;
@@ -403,20 +406,30 @@
     document.getElementById('playerAspect').appendChild(btn);
   }
 
-  async function safePlay(video) {
-    if (video.readyState >= 2 && !video.paused) { unmuteUi(video.muted); return true; }
+  async function safePlay(video, isCurrentAttempt) {
+    if (!isCurrentAttempt()) return false;
+    if (video.readyState >= 2 && !video.paused) {
+      unmuteUi(video.muted);
+      return true;
+    }
     try {
       video.muted = false;
       await video.play();
+      if (!isCurrentAttempt()) return false;
       unmuteUi(false);
       return true;
-    } catch (_) {
+    } catch (error) {
+      // load() rejects the old play() promise with AbortError during a switch.
+      // Do not retry that old request against the newly selected stream.
+      if (!isCurrentAttempt() || (error && error.name === 'AbortError')) return false;
       try {
         video.muted = true;
         await video.play();
+        if (!isCurrentAttempt()) return false;
         unmuteUi(true);
         return true;
-      } catch (_) {
+      } catch (mutedError) {
+        if (!isCurrentAttempt() || (mutedError && mutedError.name === 'AbortError')) return false;
         return false;
       }
     }
@@ -426,6 +439,7 @@
   function tryMirror(url, token) {
     return new Promise(resolve => {
       const video = els.player;
+      const mirrorToken = ++mirrorAttemptToken;
       const isHlsUrl = /\.m3u8(\?|$)/i.test(url);
       const isHttp = url.startsWith('http://');
       const useHlsJs = isHlsUrl && typeof Hls !== 'undefined' && Hls.isSupported();
@@ -435,9 +449,11 @@
 
       let settled = false;
       let hls = null;
+      const isCurrentAttempt = () => !settled && token === attemptToken && mirrorToken === mirrorAttemptToken;
       const finish = (ok) => {
         if (settled) return;
         settled = true;
+        if (!ok && mirrorToken === mirrorAttemptToken) mirrorAttemptToken++;
         clearTimeout(timer);
         video.removeEventListener('playing', onPlaying);
         if (token !== attemptToken && ok) ok = false;
@@ -476,11 +492,11 @@
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (settled) return;
-          safePlay(video);
+          safePlay(video, isCurrentAttempt);
         });
         hls.on(Hls.Events.FRAG_BUFFERED, () => {
           if (settled) return;
-          safePlay(video);
+          safePlay(video, isCurrentAttempt);
           // Also accept having buffered data as success even if autoplay is blocked.
           setTimeout(() => { if (!settled && video.readyState >= 2) finish(true); }, 250);
         });
@@ -490,9 +506,9 @@
         });
       } else {
         video.src = url;
-        video.onloadedmetadata = () => { if (!settled) safePlay(video); };
+        video.onloadedmetadata = () => { if (!settled) safePlay(video, isCurrentAttempt); };
         video.onerror = () => finish(false);
-        safePlay(video);
+        safePlay(video, isCurrentAttempt);
       }
     });
   }

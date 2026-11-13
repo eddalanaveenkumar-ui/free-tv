@@ -538,6 +538,7 @@ function openPlayer(ch) {
     `<span class="mini-chip">${esc(ch.country)}</span>`,
   ].join('');
 
+  hideAutoplayHint();
   el.playerError.hidden = true;
   el.playerLoading.hidden = false;
   el.loadingText.textContent = 'Connecting…';
@@ -563,6 +564,7 @@ function closePlayer() {
   isOpen = false;
   attemptId++;
   playId++;
+  hideAutoplayHint();
   destroyHls();
   el.video.pause();
   el.video.removeAttribute('src');
@@ -576,23 +578,69 @@ function closePlayer() {
 // Autoplay is often blocked with sound. Try unmuted, fall back to muted.
 // Every await re-checks that we are still the active playback request — a
 // previous stream's play() promise can resolve after the user switched.
+let autoplayHintShown = false;
+
 async function playVideo(isCurrent) {
   const v = el.video;
   if (!isCurrent()) return false;
+
   try {
     v.muted = false;
     await v.play();
+    hideAutoplayHint();
     return isCurrent();
   } catch (err) {
+    // load() rejects the previous stream's play() promise with AbortError.
+    // That is a switch, not a blocked autoplay.
     if (!isCurrent() || (err && err.name === 'AbortError')) return false;
+
+    // Sound was blocked: fall back to muted playback so the picture still plays,
+    // and offer a one-tap unmute inside the user gesture.
     try {
       v.muted = true;
       await v.play();
-      return isCurrent();
+      if (!isCurrent()) return false;
+      showAutoplayHint();
+      return true;
     } catch (e2) {
+      if (!isCurrent()) return false;
+      // Fully blocked (NotAllowedError): surface an explicit play button.
+      if (e2 && e2.name === 'NotAllowedError') showAutoplayHint('tap');
       return false;
     }
   }
+}
+
+function showAutoplayHint(mode) {
+  let btn = document.getElementById('autoplayBtn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'autoplayBtn';
+    btn.className = 'autoplay-btn';
+    btn.type = 'button';
+    btn.onclick = () => {
+      const v = el.video;
+      v.muted = false;
+      v.play().catch(() => {
+        v.muted = true;
+        return v.play();
+      }).finally(() => { btn.textContent = '🔇 Muted'; });
+    };
+    el.playerStage.appendChild(btn);
+  }
+  btn.textContent = mode === 'tap' ? '▶ Tap to play' : '🔊 Tap for sound';
+  if (mode === 'tap') btn.onclick = () => {
+    el.video.play().catch(() => {});
+    btn.remove();
+  };
+  btn.hidden = false;
+  autoplayHintShown = true;
+}
+
+function hideAutoplayHint() {
+  const btn = document.getElementById('autoplayBtn');
+  if (btn) btn.remove();
+  autoplayHintShown = false;
 }
 
 function destroyHls() {

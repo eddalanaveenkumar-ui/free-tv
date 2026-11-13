@@ -794,3 +794,26 @@ a:hover { text-decoration: underline; }
   outline: 2px solid #bae6fd;
   outline-offset: 3px;
 }
+
+
+/* Lazy-render sentinel used by the channel grid IntersectionObserver. */
+.sentinel { height: 1px; }
+
+/* Compact unmute action shown when autoplay succeeds only in muted mode. */
+.unmute-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 3.2rem;
+  transform: translateX(-50%);
+  z-index: 15;
+  background: rgba(56, 189, 248, 0.95);
+  color: #030712;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+}
+.unmute-btn:hover { background: #7dd3fc; }

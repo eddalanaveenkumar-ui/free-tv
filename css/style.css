@@ -775,3 +775,22 @@ a:hover { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) {
   .player-loading::before { animation: none; }
 }
+
+
+/* Actionable autoplay fallback: the loading layer must offer a user gesture. */
+.player-loading .btn-primary {
+  pointer-events: auto;
+  border-color: rgba(56, 189, 248, 0.55);
+  background: #0ea5e9;
+  color: #03111f;
+  font-weight: 750;
+  box-shadow: 0 8px 24px rgba(14, 165, 233, 0.22);
+}
+.player-loading .btn-primary:hover {
+  background: #38bdf8;
+  border-color: #7dd3fc;
+}
+.player-loading .btn-primary:focus-visible {
+  outline: 2px solid #bae6fd;
+  outline-offset: 3px;
+}

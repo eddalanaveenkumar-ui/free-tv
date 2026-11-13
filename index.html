@@ -66,6 +66,7 @@
     </div>
     <div id="status" class="status"></div>
     <div class="grid" id="channelGrid"></div>
+    <div id="sentinel" class="sentinel" hidden></div>
     <p id="emptyMsg" class="empty-msg" hidden>No channels match your filters.</p>
   </main>
 
@@ -88,7 +89,7 @@
     <div class="player-wrap">
       <div class="player-aspect" id="playerAspect">
         <video id="player" playsinline muted controls preload="none" poster=""></video>
-        <div id="playerLoading" class="player-loading" role="status" aria-live="polite"><span>Connecting to stream…</span><button id="startPlayback" class="btn btn-primary hidden" type="button">Play channel</button></div>
+        <div id="playerLoading" class="player-loading" role="status" aria-live="polite"><span>Connecting to stream…</span></div>
         <div id="playerError" class="player-error hidden" role="alert">
           <div class="player-error-msg"></div>
           <div class="mirrors" id="npMirrors"></div>
@@ -122,7 +123,7 @@
 </template>
 
 <!-- Load the player engine before the application; keep both parser-ordered. -->
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js"></script>
+<script src="js/vendor/hls.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

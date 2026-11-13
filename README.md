@@ -1,37 +1,62 @@
-# Free TV
+# FreeTV
 
-Watch thousands of free live TV channels from around the world — no subscription, no signup.
+Watch thousands of free live TV channels from around the world — no signup, no subscription.
+A premium OTT-style interface (Netflix / JioHotstar inspired) over the public
+[iptv-org](https://github.com/iptv-org/iptv) playlists.
 
-- **14,000+ channels** across **180+ countries** (United States, India, United Kingdom, Brazil, Canada, and many more)
-- Categories: News, Sports, Movies, Music, Kids, Religious, Shopping
-- Search, country & category filters, favorites (stored locally)
-- Works on desktop and mobile
+- **11,697 channels** from **169 countries**
+- **Channel logos** for 77% of channels (from [iptv-org/database](https://github.com/iptv-org/database))
+- News, Sports, Movies, Music, Kids, Religious, Shopping
+- Favorites and "Continue watching" saved locally
+- Full-screen player with mirror switching
 
-Powered by the public [iptv-org/iptv](https://github.com/iptv-org/iptv) playlist (`index.m3u`), rebuilt every time the source playlists change.
+## Interface
 
-## Demo
+**Desktop** — fixed top bar with brand, category nav, and search; hero banner rotating
+through featured channels; horizontal rails for Featured / Trending / Countries and one
+rail per top market; infinite grid for the full catalog.
 
-https://free-tv.vercel.app (if deployed)
+**Mobile** — 4-tab bottom navigation (Home · Search · Browse · Favorites). Search docks
+under the logo when the Search tab is tapped, per the usual Hotstar-style pattern.
+Player becomes a full-screen sheet with "More like this" below.
 
-## Tech
+## Performance
 
-- Vanilla JavaScript (no build step)
-- [hls.js](https://github.com/video-dev/hls.js) for HLS (.m3u8) playback in browsers without native HLS support
-- Channel data generated from `iptv-org/iptv` country playlists (`streams/*.m3u`)
-- Deployable on Vercel, Netlify, GitHub Pages, or any static host
+Everything is bounded so the page never blocks:
+
+| Area | Budget |
+|---|---|
+| Grid & search results | **30 channels** per page, grows on scroll |
+| Rails | **20 tiles** per chunk, grows on horizontal scroll |
+| First paint payload | 1.2 MB catalog (id, name, country, category, quality, logo) |
+| Stream URLs | lazy per-country file, fetched on first play |
+| Logo images | `loading="lazy"`, initials fallback on error |
+
+## Data layout
+
+| File | Size | Purpose |
+|---|---|---|
+| `public/data/catalog.json` | ~1.2 MB | compact index for the whole UI |
+| `public/data/ch/<CC>.json` | 0.4–400 KB | full records with stream mirrors |
+| `public/data/countries.json` | 16 KB | names, flags, counts |
+| `public/data/categories.json` | 0.3 KB | category counts |
+| `public/data/shelves.json` | 1 KB | curated hero + trending picks |
 
 ## Local development
 
 ```bash
-# serve the folder
 python3 -m http.server 3000
 # open http://localhost:3000
 ```
 
 ## Deployment
 
-**Vercel:** push to GitHub, import the repo in Vercel — it's a static site, zero config.
+Pure static site — import the repo on Vercel (zero config), or host anywhere.
 
-## Disclaimer
+## Known limitations
 
-This site does not host any streams. All channel URLs come from the public iptv-org playlist and are hosted by third parties. Stream availability and quality depend on the upstream sources; some streams are HTTP-only and may not play when the site is served over HTTPS.
+- iptv-org streams are third-party and frequently go offline.
+- On HTTPS pages browsers block `http://` media, so HTTP-only channels can't play there.
+- Some channels are geo-restricted by their host.
+
+This site hosts no streams. All URLs come from the public iptv-org playlist.

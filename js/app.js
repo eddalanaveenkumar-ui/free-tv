@@ -1,658 +1,862 @@
-// Free TV — application logic
+// ============================================================
+// FreeTV — OTT-style app (rails + full-screen player)
+// ============================================================
 (() => {
-  const BASE = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, '/');
-  const DATA_DIR = 'public/data';
+'use strict';
 
-  // --- DOM elements ---
-  const els = {
-    grid: document.getElementById('channelGrid'),
-    status: document.getElementById('status'),
-    countText: document.getElementById('countText'),
-    viewTitle: document.getElementById('viewTitle'),
-    emptyMsg: document.getElementById('emptyMsg'),
-    searchInput: document.getElementById('searchInput'),
-    searchClear: document.getElementById('searchClear'),
-    categoryPills: document.getElementById('categoryPills'),
-    countrySearch: document.getElementById('countrySearch'),
-    countryList: document.getElementById('countryList'),
-    favHint: document.getElementById('favHint'),
-    favPills: document.getElementById('favPills'),
-    toggleSidebar: document.getElementById('toggleSidebar'),
-    sidebarClose: document.getElementById('sidebarClose'),
-    sidebarOverlay: document.getElementById('sidebarOverlay'),
-    sidebar: document.getElementById('sidebar'),
-    playerPanel: document.getElementById('playerPanel'),
-    playerClose: document.getElementById('playerClose'),
-    player: document.getElementById('player'),
-    playerLoading: document.getElementById('playerLoading'),
-    startPlayback: document.getElementById('startPlayback'),
-    playerError: document.getElementById('playerError'),
-    playerErrorMsg: document.getElementById('playerError').querySelector('.player-error-msg'),
-    retryPlayer: document.getElementById('retryPlayer'),
-    npName: document.getElementById('npName'),
-    npMeta: document.getElementById('npMeta'),
-    npFlag: document.getElementById('npFlag'),
-    npFav: document.getElementById('npFav'),
-    npFullscreen: document.getElementById('npFullscreen'),
-    mirrorList: document.getElementById('mirrorList'),
-    streamInfo: document.getElementById('streamInfo'),
-    playerHint: document.getElementById('playerHint'),
-    viewGrid: document.getElementById('viewGrid'),
-    viewList: document.getElementById('viewList'),
-    channelTpl: document.getElementById('channelTpl'),
-    metaBadge: document.getElementById('metaBadge')
-  };
+const DATA = 'public/data';
+const PAGE = 30;              // channels rendered per page
+const FAV_KEY = 'freetv:favs';
+const RECENT_KEY = 'freetv:recent';
 
-  // --- State ---
-  let channels = [];
-  let countries = [];
-  let categories = [];
-  let filters = {
-    q: '',
-    category: 'All',
-    country: '',
-    favorites: false
-  };
-  let viewMode = 'grid'; // grid | list
-  let favorites = new Set();
-  let current = null;
-  let hls = null;
-  let currentMirrors = [];
-  let mirrorIndex = 0;
-  let playbackTimer = null;
-  let playbackAttempt = 0;
-  const PLAYBACK_TIMEOUT_MS = 12000;
+// ---------------- DOM ----------------
+const $ = (id) => document.getElementById(id);
+const el = {
+  topbar: $('topbar'),
+  page: $('page'),
+  hero: $('hero'),
+  heroBg: $('heroBg'),
+  heroArt: $('heroArt'),
+  heroTitle: $('heroTitle'),
+  heroSub: $('heroSub'),
+  heroMeta: $('heroMeta'),
+  heroPlay: $('heroPlay'),
+  heroInfo: $('heroInfo'),
 
-  // --- Parse initial filters from URL query ---
-  function initFiltersFromUrl() {
-    const params = new URLSearchParams(location.search);
-    if (params.get('q')) filters.q = params.get('q');
-    if (params.get('category')) filters.category = params.get('category');
-    if (params.get('country')) filters.country = params.get('country');
-    if (params.get('favs') === '1') filters.favorites = true;
-    if (params.get('view')) viewMode = params.get('view');
-    if (filters.q) els.searchInput.value = filters.q;
-    if (filters.country) els.countrySearch.value = filters.country;
-  }
+  searchInput: $('searchInput'),
+  searchClear: $('searchClear'),
+  favBtn: $('favBtn'),
 
-  function pushFilterUrl() {
-    const params = new URLSearchParams();
-    if (filters.q) params.set('q', filters.q);
-    if (filters.category && filters.category !== 'All') params.set('category', filters.category);
-    if (filters.country) params.set('country', filters.country);
-    if (filters.favorites) params.set('favs', '1');
-    params.set('view', viewMode);
-    const qs = params.toString();
-    history.replaceState(null, '', qs ? '?' + qs : window.location.pathname);
-  }
+  rails: $('rails'),
+  recentRail: $('recentRail'),
+  recentScroll: $('recentScroll'),
+  featuredScroll: $('featuredScroll'),
+  chips: $('chips'),
+  trendingScroll: $('trendingScroll'),
+  countryRail: $('countryRail'),
+  countryRails: $('countryRails'),
 
-  // --- Data loading ---
-  async function loadData() {
-    setStatus('Loading channel list…', 'info');
-    try {
-      const [indexRes, channelsRes, countriesRes, categoriesRes] = await Promise.all([
-        fetch(`${DATA_DIR}/index.json`),
-        fetch(`${DATA_DIR}/channels.json`),
-        fetch(`${DATA_DIR}/countries.json`),
-        fetch(`${DATA_DIR}/categories.json`)
-      ]);
-      const index = await indexRes.json();
-      channels = await channelsRes.json();
-      countries = await countriesRes.json();
-      categories = await categoriesRes.json();
+  results: $('results'),
+  resultsTitle: $('resultsTitle'),
+  resultsCount: $('resultsCount'),
+  resultsGrid: $('resultsGrid'),
+  resultsSentinel: $('resultsSentinel'),
 
-      els.metaBadge.textContent = `${index.total} channels • ${index.countries} countries`;
-      els.metaBadge.className = 'badge';
+  browse: $('browse'),
+  browseBack: $('browseBack'),
+  browseTitle: $('browseTitle'),
+  browseCount: $('browseCount'),
+  browseGrid: $('browseGrid'),
+  browseSentinel: $('browseSentinel'),
+  browseEmpty: $('browseEmpty'),
 
-      loadFavorites();
-      renderFilters();
-      renderChannels();
-      initPlayerEvents();
-      maybePlayFromUrl();
-    } catch (err) {
-      setStatus('Failed to load channel data.', 'warn');
-      console.error(err);
-    }
-  }
+  player: $('player'),
+  video: $('video'),
+  playerClose: $('playerClose'),
+  npName: $('npName'),
+  npMeta: $('npMeta'),
+  npFav: $('npFav'),
+  playerStage: $('playerStage'),
+  playerLoading: $('playerLoading'),
+  loadingText: $('loadingText'),
+  playerError: $('playerError'),
+  playerErrorMsg: $('playerErrorMsg'),
+  retryBtn: $('retryBtn'),
+  nextMirrorBtn: $('nextMirrorBtn'),
+  mirrors: $('mirrors'),
+  playerChips: $('playerChips'),
+  upNextScroll: $('upNextScroll'),
 
-  function setStatus(msg, type) {
-    els.status.textContent = msg;
-    els.status.className = `status show ${type || 'info'}`;
-  }
+  bottomnav: $('bottomnav'),
+};
 
-  // --- Favorites (localStorage) ---
-  function loadFavorites() {
-    try {
-      const raw = localStorage.getItem('freetv-favorites');
-      if (raw) favorites = new Set(JSON.parse(raw));
-    } catch (_) { favorites = new Set(); }
-  }
-  function saveFavorites() {
-    try { localStorage.setItem('freetv-favorites', JSON.stringify([...favorites])); } catch (_) {}
-  }
-  function isFav(id) { return favorites.has(id); }
-  function toggleFav(id) {
-    if (favorites.has(id)) favorites.delete(id);
-    else favorites.add(id);
-    saveFavorites();
-    renderFavs();
-    renderChannels();
-    updateNpFav();
-  }
+// ---------------- state ----------------
+let channels = [];              // expanded from catalog
+let byId = new Map();
+let byCountry = new Map();
+let countries = [];
+let categories = [];
+let shelves = { featured: [], trending: [], countries: [] };
+let favs = new Set();
+let recent = [];
 
-  // --- Render filters ---
-  function renderFilters() {
-    // Categories
-    els.categoryPills.innerHTML = '';
-    const allPill = document.createElement('button');
-    allPill.type = 'button';
-    allPill.className = `pill ${filters.category === 'All' ? 'active' : ''}`;
-    allPill.textContent = `All`;
-    allPill.onclick = () => setFilter('category', 'All');
-    els.categoryPills.appendChild(allPill);
-    for (const cat of categories) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = `pill ${filters.category === cat.name ? 'active' : ''}`;
-      b.innerHTML = `${escapeHtml(cat.name)} <small>${cat.count}</small>`;
-      b.onclick = () => setFilter('category', cat.name);
-      els.categoryPills.appendChild(b);
+let view = 'home';              // home | browse | favorites
+let query = '';
+
+// player state
+let current = null;
+let mirrors = [];
+let mirrorIndex = 0;
+let hls = null;
+let attemptId = 0;        // bumps when a different channel is opened
+let playId = 0;           // bumps every stream switch inside the same channel
+let isOpen = false;
+let heroTimer = null;
+
+// ---------------- helpers ----------------
+const qRank = (q) => { const m = (q || '').match(/(\d{3,4})/); return m ? +m[1] : 0; };
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const initials = (name) => name.replace(/[^\p{L}\p{N} ]/gu, '').split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase();
+
+function store(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (_) {} }
+function restore(key, fallback) { try { const v = JSON.parse(localStorage.getItem(key)); return v == null ? fallback : v; } catch (_) { return fallback; } }
+
+async function getJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url} → ${res.status}`);
+  return res.json();
+}
+
+// ---------------- boot ----------------
+async function boot() {
+  try {
+    const [catalog, countriesData, categoriesData, shelvesData, indexData] = await Promise.all([
+      getJSON(`${DATA}/catalog.json`),
+      getJSON(`${DATA}/countries.json`),
+      getJSON(`${DATA}/categories.json`),
+      getJSON(`${DATA}/shelves.json`).catch(() => ({ featured: [], trending: [], countries: [] })),
+      getJSON(`${DATA}/index.json`).catch(() => null),
+    ]);
+
+    countries = countriesData;
+    categories = categoriesData;
+    shelves = shelvesData;
+
+    const countryMeta = new Map(countries.map(c => [c.code, c]));
+
+    channels = catalog.map(([id, name, cc, category, quality, logo]) => {
+      const meta = countryMeta.get(cc) || {};
+      return {
+        id, name, countryCode: cc, category, quality: quality || '',
+        logo: logo || '', country: meta.name || cc, flag: meta.flag || '🌍',
+        mirrors: null,
+      };
+    });
+
+    byId = new Map(channels.map(c => [c.id, c]));
+    for (const c of channels) {
+      if (!byCountry.has(c.countryCode)) byCountry.set(c.countryCode, []);
+      byCountry.get(c.countryCode).push(c);
     }
 
-    // Countries
-    renderCountryList();
+    favs = new Set(restore(FAV_KEY, []));
+    recent = restore(RECENT_KEY, []);
 
-    // Favorites
-    renderFavs();
+    if (indexData) document.querySelector('meta[name=description]')
+      .setAttribute('content', `${indexData.total.toLocaleString()} free live TV channels from ${indexData.countries} countries.`);
+
+    buildHero();
+    buildRails();
+    bindGlobal();
+    handleRoute();
+  } catch (err) {
+    console.error(err);
+    el.rails.innerHTML = `<div class="empty-msg">Couldn't load channels. Check your connection and reload.</div>`;
   }
+}
 
-  function renderCountryList() {
-    els.countryList.innerHTML = '';
-    const term = els.countrySearch.value.toLowerCase();
-    const filtered = countries.filter(c =>
-      c.name.toLowerCase().includes(term) || c.code.toLowerCase().includes(term)
-    );
-    for (const c of filtered) {
-      const item = document.createElement('div');
-      item.className = `country-item ${filters.country === c.code ? 'active' : ''}`;
-      item.innerHTML = `<span class="flag">${c.flag}</span><span class="name">${escapeHtml(c.name)}</span><span class="count">${c.count}</span>`;
-      item.onclick = () => setFilter('country', c.code);
-      els.countryList.appendChild(item);
+// ---------------- lazy stream data ----------------
+const countryData = new Map();
+async function loadStreams(ch) {
+  if (ch.mirrors && ch.mirrors.length) return ch.mirrors;
+  const cc = ch.countryCode;
+  if (!countryData.has(cc)) {
+    const p = getJSON(`${DATA}/ch/${cc}.json`).then((list) => {
+      for (const full of list) {
+        const c = byId.get(full.id);
+        if (!c) continue;
+        const all = [full.url, ...(full.mirrors || [])].filter(Boolean);
+        c.mirrors = [...new Set(all)];
+      }
+      return list;
+    }).catch((e) => { countryData.delete(cc); throw e; });
+    countryData.set(cc, p);
+  }
+  await countryData.get(cc);
+  return ch.mirrors || [];
+}
+
+// ---------------- hero ----------------
+function buildHero() {
+  const lead = (shelves.featured || []).map(id => byId.get(id)).filter(Boolean).slice(0, 8);
+  if (!lead.length) return;
+
+  let i = Math.floor(Math.random() * lead.length);
+  paintHero(lead[i]);
+
+  // gentle rotation so the hero feels alive
+  clearInterval(heroTimer);
+  heroTimer = setInterval(() => {
+    if (view !== 'home' || isOpen) return;
+    i = (i + 1) % lead.length;
+    paintHero(lead[i]);
+  }, 9000);
+}
+
+function paintHero(pick) {
+  if (!pick) return;
+  el.heroTitle.textContent = pick.name;
+  el.heroSub.textContent = `${pick.country} • ${pick.category} — streaming free, live right now. No signup needed.`;
+  el.heroMeta.innerHTML = [
+    pick.quality ? `<span class="pill hd">${esc(pick.quality)}</span>` : '',
+    `<span class="pill">${esc(pick.category)}</span>`,
+    `<span class="pill">${esc(pick.flag)} ${esc(pick.country)}</span>`,
+  ].join('');
+  el.heroArt.innerHTML = pick.logo
+    ? `<img src="${esc(pick.logo)}" alt="${esc(pick.name)}" referrerpolicy="no-referrer"
+        onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'hero-fallback',textContent:'${esc(initials(pick.name))}'}))">`
+    : `<div class="hero-fallback">${esc(initials(pick.name))}</div>`;
+  el.heroPlay.onclick = () => openPlayer(pick);
+  el.heroInfo.onclick = () => openPlayer(pick);
+}
+
+// ---------------- tiles ----------------
+function tile(ch, opts = {}) {
+  const t = document.createElement('div');
+  t.className = 'tile' + (opts.compact ? ' compact' : '');
+  t.dataset.id = ch.id;
+  t.setAttribute('role', 'button');
+  t.setAttribute('tabindex', '0');
+
+  const fav = favs.has(ch.id);
+  const art = ch.logo
+    ? `<img src="${esc(ch.logo)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer"
+            onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'fallback',textContent:this.dataset.fb}))"
+            data-fb="${esc(initials(ch.name))}">`
+    : `<div class="fallback">${esc(initials(ch.name))}</div>`;
+
+  t.innerHTML = `
+    <div class="tile-art">
+      ${art}
+      <span class="tile-live">LIVE</span>
+      ${ch.quality ? `<span class="tile-q">${esc(ch.quality.replace('P', ''))}</span>` : ''}
+      <button class="tile-fav ${fav ? 'on' : ''}" aria-label="Favorite">${fav ? '★' : '☆'}</button>
+    </div>
+    <div class="tile-name">${esc(ch.name)}</div>
+    <div class="tile-sub">${esc(ch.flag)} ${esc(ch.country)}${ch.category !== 'General' ? ' • ' + esc(ch.category) : ''}</div>`;
+
+  t.addEventListener('click', (e) => {
+    if (e.target.closest('.tile-fav')) {
+      e.stopPropagation();
+      toggleFav(ch.id);
+      return;
     }
-  }
+    openPlayer(ch);
+  });
+  t.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPlayer(ch); }
+  });
+  return t;
+}
 
-  function renderFavs() {
-    const count = favorites.size;
-    els.favHint.textContent = count ? `${count} favorite channel${count === 1 ? '' : 's'}` : 'No favorites yet. Tap ★ on a channel.';
-    els.favPills.innerHTML = '';
-    if (!count) return;
-    const favChannels = channels.filter(ch => isFav(ch.id));
-    for (const ch of favChannels.slice(0, 24)) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'pill active';
-      b.innerHTML = `${ch.flag} ${escapeHtml(ch.name)}`;
-      b.title = ch.country;
-      b.onclick = (e) => { e.stopPropagation(); selectChannel(ch); };
-      els.favPills.appendChild(b);
-    }
-  }
+function countryTile(c) {
+  const t = document.createElement('div');
+  t.className = 'tile country-tile';
+  t.innerHTML = `
+    <div class="tile-art"><span class="flag-big">${c.flag}</span></div>
+    <div class="tile-name">${esc(c.name)}</div>
+    <div class="tile-sub">${c.count} channels</div>`;
+  t.onclick = () => showBrowse({ country: c.code, title: c.name });
+  return t;
+}
 
-  function setFilter(key, value) {
-    filters[key] = value;
-    if (key === 'country') els.countrySearch.value = '';
-    if (key === 'category') {
-      // highlight pill handled by re-render
-    }
-    renderFilters();
-    renderChannels();
-    pushFilterUrl();
-    if (window.innerWidth < 1200) closeSidebar();
-  }
+// ---------------- rails ----------------
+// Rails load in chunks of 20 as you scroll sideways — never 100+ tiles at once.
+const RAIL_CHUNK = 20;
 
-  // --- Render channels ---
-  function escapeHtml(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-  }
+function fillRail(container, chans) {
+  container.innerHTML = '';
+  container._list = chans;
+  container._shown = 0;
+  if (container._onScroll) container.removeEventListener('scroll', container._onScroll);
 
-  function matchesFilters(ch) {
-    if (filters.favorites && !isFav(ch.id)) return false;
-    if (filters.category && filters.category !== 'All' && ch.category !== filters.category) return false;
-    if (filters.country && ch.countryCode !== filters.country) return false;
-    if (filters.q) {
-      const q = filters.q.toLowerCase();
-      if (!ch.name.toLowerCase().includes(q) &&
-          !ch.country.toLowerCase().includes(q) &&
-          !ch.countryCode.toLowerCase().includes(q) &&
-          !ch.category.toLowerCase().includes(q)) return false;
-    }
-    return true;
-  }
-
-  function renderChannels() {
-    const list = channels.filter(matchesFilters);
-    els.countText.textContent = `${list.length} channel${list.length === 1 ? '' : 's'}`;
-    els.viewTitle.textContent = filters.favorites ? 'Favorites'
-      : (filters.country ? countries.find(c => c.code === filters.country)?.name || filters.country
-        : filters.category === 'All' ? 'All Channels' : filters.category);
-    els.emptyMsg.hidden = list.length > 0;
-
+  const appendChunk = () => {
+    const list = container._list || [];
+    if (container._shown >= list.length) return;
+    const slice = list.slice(container._shown, container._shown + RAIL_CHUNK);
     const frag = document.createDocumentFragment();
-    const isList = viewMode === 'list';
-    if (isList) els.grid.classList.add('list'); else els.grid.classList.remove('list');
+    for (const ch of slice) frag.appendChild(tile(ch));
+    container.appendChild(frag);
+    container._shown += slice.length;
+  };
 
-    for (const ch of list) {
-      const card = document.createElement('div');
-      card.className = 'channel-card';
-      card.setAttribute('role', 'button');
-      card.setAttribute('tabindex', '0');
-      card.setAttribute('aria-label', `${ch.name}, ${ch.country}`);
-      card.dataset.id = ch.id;
-      card.innerHTML =
-        `<div class="card-flag">${ch.flag}</div>
-         <div class="card-body">
-           <div class="card-name">${escapeHtml(ch.name)}</div>
-           <div class="card-meta">${escapeHtml(ch.country)} ${ch.category !== 'General' ? '• ' + escapeHtml(ch.category) : ''}${ch.quality ? ' • ' + ch.quality : ''}</div>
-         </div>
-         <div class="card-quality">${ch.quality || ''}</div>
-         <button class="card-fav ${isFav(ch.id) ? 'on' : ''}" data-id="${escapeHtmlAttr(ch.id)}" title="${isFav(ch.id) ? 'Remove from favorites' : 'Add to favorites'}">${isFav(ch.id) ? '★' : '☆'}</button>`;
-      card.onclick = (e) => { if (e.target.classList.contains('card-fav')) return; selectChannel(ch); };
-      card.ondblclick = (e) => { if (e.target.classList.contains('card-fav')) return; selectChannel(ch); toggleFullscreen(); };
-      card.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectChannel(ch); } };
-      card.querySelector('.card-fav').onclick = (e) => { e.stopPropagation(); toggleFav(ch.id); };
-      frag.appendChild(card);
-    }
-    els.grid.innerHTML = '';
-    els.grid.appendChild(frag);
+  appendChunk();
+
+  const onScroll = () => {
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+    if (scrollLeft + clientWidth > scrollWidth - 480) appendChunk();
+  };
+  container._onScroll = onScroll;
+  container.addEventListener('scroll', onScroll, { passive: true });
+}
+
+function buildRails() {
+  const byIdList = (ids) => (ids || []).map(id => byId.get(id)).filter(Boolean);
+
+  // featured
+  const featured = byIdList(shelves.featured);
+  fillRail(el.featuredScroll, featured.length ? featured : channels.slice(0, RAIL_CHUNK));
+
+  // continue watching
+  const rec = byIdList(recent).slice(0, 20);
+  if (rec.length) {
+    el.recentRail.hidden = false;
+    fillRail(el.recentScroll, rec);
   }
 
-  function escapeHtmlAttr(s) {
-    return String(s).replace(/"/g, '&quot;');
+  // category chips
+  el.chips.innerHTML = '';
+  const all = document.createElement('button');
+  all.className = 'chip active';
+  all.textContent = 'All';
+  all.onclick = () => showBrowse({ title: 'All channels' });
+  el.chips.appendChild(all);
+  for (const cat of categories) {
+    const b = document.createElement('button');
+    b.className = 'chip';
+    b.innerHTML = `${esc(cat.name)} <span style="opacity:.6">${cat.count}</span>`;
+    b.onclick = () => showBrowse({ category: cat.name, title: cat.name });
+    el.chips.appendChild(b);
   }
 
-  // --- Player ---
-  function selectChannel(ch) {
-    current = ch;
-    els.npFlag.textContent = ch.flag;
-    els.npName.textContent = ch.name;
-    els.npMeta.textContent = `${ch.country} ${ch.category !== 'General' ? '• ' + ch.category : ''}${ch.quality ? ' • ' + ch.quality : ''}`;
-    currentMirrors = ch.mirrors.slice();
-    mirrorIndex = 0;
-    updateNpFav();
-    if (els.playerPanel.classList.contains('open') === false) els.playerPanel.classList.add('open');
-    els.playerPanel.setAttribute('aria-hidden', 'false');
-    // The responsive player is a fixed drawer/bottom sheet; do not scroll the page behind it.
-    loadStream(currentMirrors[mirrorIndex]);
-    if (history.state && history.state.channelId === ch.id) {} else {
-      history.replaceState({ channelId: ch.id }, '', location.pathname + (location.search ? location.search : '') + '#' + ch.id);
-    }
+  // trending
+  const trending = byIdList(shelves.trending);
+  fillRail(el.trendingScroll, (trending.length ? trending : channels.slice(30, 90)).slice(0, 60));
+
+  // countries
+  const order = shelves.countries && shelves.countries.length ? shelves.countries : countries.slice(0, 12).map(c => c.code);
+  const cmap = new Map(countries.map(c => [c.code, c]));
+  el.countryRail.innerHTML = '';
+  for (const code of order) {
+    const c = cmap.get(code);
+    if (c) el.countryRail.appendChild(countryTile(c));
   }
 
-  function updateNpFav() {
-    els.npFav.textContent = isFav(current.id) ? '★' : '☆';
-    els.npFav.className = `icon-btn ${isFav(current.id) ? 'on' : ''}`;
+  // per-country rails (top 6 markets)
+  el.countryRails.innerHTML = '';
+  const useCodes = order.slice(0, 6);
+  for (const code of useCodes) {
+    const c = cmap.get(code);
+    if (!c) continue;
+    const list = (byCountry.get(code) || []).filter(x => x.logo).slice(0, 40);
+    if (!list.length) continue;
+
+    const section = document.createElement('section');
+    section.className = 'rail';
+    section.innerHTML = `
+      <div class="rail-head">
+        <h2>${esc(c.flag)} ${esc(c.name)}</h2>
+        <span class="rail-sub">${c.count} channels</span>
+        <button class="see-all">See all</button>
+      </div>
+      <div class="rail-scroll"></div>`;
+    section.querySelector('.see-all').onclick = () => showBrowse({ country: code, title: c.name });
+    const scroller = section.querySelector('.rail-scroll');
+    fillRail(scroller, list);
+    el.countryRails.appendChild(section);
+  }
+}
+
+// ---------------- paged grid (30 at a time) ----------------
+function makePager(gridEl, sentinelEl, emptyEl) {
+  let list = [];
+  let rendered = 0;
+  let observer = null;
+  let isShowing = () => true;
+
+  function appendPage() {
+    if (rendered >= list.length) return;
+    const chunk = list.slice(rendered, rendered + PAGE);
+    const frag = document.createDocumentFragment();
+    for (const ch of chunk) frag.appendChild(tile(ch));
+    gridEl.appendChild(frag);
+    rendered += chunk.length;
+    if (emptyEl) emptyEl.hidden = list.length > 0;
+    sentinelEl.hidden = rendered >= list.length;
   }
 
-  function clearPlaybackTimer() {
-    if (playbackTimer) {
-      clearTimeout(playbackTimer);
-      playbackTimer = null;
-    }
-  }
-
-  function destroyHls() {
-    if (hls) {
-      hls.destroy();
-      hls = null;
-    }
-  }
-
-  function showPlaybackError(message) {
-    clearPlaybackTimer();
-    els.playerLoading.classList.add('hidden');
-    els.playerErrorMsg.textContent = message;
-    els.playerError.classList.remove('hidden');
-  }
-
-  function failCurrentMirror(reason, expectedAttempt = playbackAttempt) {
-    // A rejected play() promise from an older channel must never fail the
-    // currently selected channel or advance its mirror index.
-    if (expectedAttempt !== playbackAttempt) return;
-
-    clearPlaybackTimer();
-    destroyHls();
-
-    if (mirrorIndex < currentMirrors.length - 1) {
-      console.warn(`Stream ${mirrorIndex + 1} failed; trying the next mirror.`, reason);
-      mirrorIndex += 1;
-      renderMirrorButtons();
-      loadStream(currentMirrors[mirrorIndex]);
-      return;
-    }
-
-    const hasHttpMirror = currentMirrors.some((mirror) => /^http:\/\//i.test(mirror));
-    const prefix = location.protocol === 'https:' && hasHttpMirror
-      ? 'Some mirrors use HTTP and are blocked by browsers on this HTTPS site. '
-      : '';
-    showPlaybackError(prefix + (reason || 'Unable to start playback.') + ' No more mirrors are available. Try another channel or retry.');
-    console.error('All stream mirrors failed for the selected channel.', { reason });
-  }
-
-  function requestPlayback(video, attempt) {
-    if (attempt !== playbackAttempt) return;
-    let playRequest;
-    try {
-      playRequest = video.play();
-    } catch (error) {
-      if (attempt === playbackAttempt) failCurrentMirror(`Playback could not start: ${error.message || error}.`, attempt);
-      return;
-    }
-
-    if (playRequest && typeof playRequest.catch === 'function') {
-      playRequest.catch((error) => {
-        // loadStream() intentionally pauses/resets the element when the user
-        // changes channels. Browsers reject the previous play() promise with
-        // AbortError in that case; it is not a failed mirror.
-        if (attempt !== playbackAttempt || (error && error.name === 'AbortError')) return;
-
-        if (error && error.name === 'NotAllowedError') {
-          const hint = els.playerLoading.querySelector('span');
-          if (hint) hint.textContent = 'Autoplay is blocked by your browser.';
-          // Keep the overlay actionable: native controls sit underneath it.
-          // The button click calls play() directly inside the user gesture.
-          els.startPlayback.classList.remove('hidden');
-          els.playerLoading.classList.remove('hidden');
-          return;
+  function set(newList) {
+    list = newList;
+    rendered = 0;
+    gridEl.innerHTML = '';
+    appendPage();
+    if (!observer) {
+      observer = new IntersectionObserver((entries) => {
+        if (!entries.some(e => e.isIntersecting)) return;
+        if (!isShowing()) return;      // ignore sentinels of hidden views
+        appendPage();
+      }, { rootMargin: '420px' });
+      observer.observe(sentinelEl);
+      isShowing = () => {
+        let node = gridEl;
+        while (node && node !== document.body) {
+          if (node.hidden) return false;
+          node = node.parentElement;
         }
-
-        failCurrentMirror(`Playback could not start: ${error.message || error}.`, attempt);
-      });
+        return true;
+      };
     }
   }
+  return { set, appendPage };
+}
 
-  function isShortenedUrl(url) {
+// Two independent paged grids; each observer only feeds its own list.
+const resultsPager = makePager(el.resultsGrid, el.resultsSentinel, null);
+const browsePager = makePager(el.browseGrid, el.browseSentinel, el.browseEmpty);
+
+// ---------------- views ----------------
+function setActiveNav(name) {
+  document.querySelectorAll('.nav-link').forEach(b => b.classList.toggle('active', b.dataset.nav === name));
+  document.querySelectorAll('.bnav').forEach(b => b.classList.toggle('active', b.dataset.nav === name));
+}
+
+function showHome() {
+  view = 'home';
+  query = '';
+  el.searchInput.value = '';
+  el.searchClear.classList.remove('show');
+  el.results.hidden = true;
+  el.browse.hidden = true;
+  el.rails.hidden = false;
+  el.hero.hidden = false;
+  document.body.classList.remove('search-mode');
+  setActiveNav('home');
+  window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+}
+
+function filterList({ category, country }) {
+  let list = channels;
+  if (country) list = list.filter(c => c.countryCode === country);
+  if (category && category !== 'All') list = list.filter(c => c.category === category);
+  return list;
+}
+
+function showBrowse({ category, country, title } = {}) {
+  view = 'browse';
+  query = '';
+  el.searchInput.value = '';
+  el.searchClear.classList.remove('show');
+  document.body.classList.remove('search-mode');
+
+  el.rails.hidden = true;
+  el.hero.hidden = true;
+  el.results.hidden = true;
+  el.browse.hidden = false;
+
+  const list = filterList({ category, country });
+  el.browseTitle.textContent = title || category || 'All channels';
+  el.browseCount.textContent = `${list.length.toLocaleString()} channels`;
+  browsePager.set(list);
+
+  setActiveNav('browse');
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+function showFavorites() {
+  view = 'favorites';
+  el.rails.hidden = true;
+  el.hero.hidden = true;
+  el.results.hidden = true;
+  el.browse.hidden = false;
+
+  const list = channels.filter(c => favs.has(c.id));
+  el.browseTitle.textContent = 'Your favorites';
+  el.browseCount.textContent = `${list.length} channel${list.length === 1 ? '' : 's'}`;
+  el.browseEmpty.textContent = 'No favorites yet — tap ☆ on any channel.';
+  browsePager.set(list);
+
+  setActiveNav('favorites');
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+function runSearch(q) {
+  query = q.trim();
+  el.searchClear.classList.toggle('show', !!query);
+
+  if (!query) {
+    el.results.hidden = true;
+    if (view === 'home') { el.rails.hidden = false; el.hero.hidden = false; }
+    return;
+  }
+
+  const needle = query.toLowerCase();
+  const list = channels.filter(c =>
+    c.name.toLowerCase().includes(needle) ||
+    c.country.toLowerCase().includes(needle) ||
+    c.countryCode.toLowerCase().includes(needle) ||
+    c.category.toLowerCase().includes(needle)
+  );
+
+  el.rails.hidden = true;
+  el.hero.hidden = true;
+  el.browse.hidden = true;
+  el.results.hidden = false;
+  el.resultsTitle.textContent = `Results for “${query}”`;
+  el.resultsCount.textContent = `${list.length.toLocaleString()} found`;
+  resultsPager.set(list);
+  window.scrollTo({ top: 0, behavior: 'auto' });
+}
+
+// ---------------- favorites ----------------
+function toggleFav(id) {
+  if (favs.has(id)) favs.delete(id); else favs.add(id);
+  store(FAV_KEY, [...favs]);
+  // update every visible tile for this channel
+  document.querySelectorAll(`.tile[data-id="${CSS.escape(id)}"] .tile-fav`).forEach(btn => {
+    const on = favs.has(id);
+    btn.classList.toggle('on', on);
+    btn.textContent = on ? '★' : '☆';
+  });
+  if (current && current.id === id) updatePlayerFav();
+  el.favBtn.classList.toggle('on', favs.size > 0);
+  if (view === 'favorites') showFavorites();
+}
+
+function updatePlayerFav() {
+  const on = current && favs.has(current.id);
+  el.npFav.textContent = on ? '★' : '☆';
+  el.npFav.classList.toggle('on', !!on);
+}
+
+// ---------------- player ----------------
+function openPlayer(ch) {
+  current = ch;
+  isOpen = true;
+
+  el.player.classList.add('open');
+  el.player.setAttribute('aria-hidden', 'false');
+  document.body.classList.add('playing');
+  history.replaceState({ channel: ch.id }, '', '#' + ch.id);
+
+  el.npName.textContent = ch.name;
+  el.npMeta.textContent = [ch.flag + ' ' + ch.country, ch.category, ch.quality].filter(Boolean).join(' • ');
+  updatePlayerFav();
+
+  el.playerChips.innerHTML = [
+    ch.quality ? `<span class="mini-chip">${esc(ch.quality)}</span>` : '',
+    `<span class="mini-chip">${esc(ch.category)}</span>`,
+    `<span class="mini-chip">${esc(ch.country)}</span>`,
+  ].join('');
+
+  hideAutoplayHint();
+  el.playerError.hidden = true;
+  el.playerLoading.hidden = false;
+  el.loadingText.textContent = 'Connecting…';
+  el.mirrors.innerHTML = '';
+
+  buildUpNext(ch);
+  recordRecent(ch.id);
+
+  // resolve streams lazily
+  const myAttempt = ++attemptId;
+  loadStreams(ch).then((list) => {
+    if (myAttempt !== attemptId) return;
+    mirrors = list.filter(Boolean);
+    if (!mirrors.length) { failPlayer('No stream available for this channel.'); return; }
+    startPlayback(0, myAttempt);
+  }).catch((err) => {
+    console.error(err);
+    if (myAttempt === attemptId) failPlayer('Could not load this channel\'s stream.');
+  });
+}
+
+function closePlayer() {
+  isOpen = false;
+  attemptId++;
+  playId++;
+  hideAutoplayHint();
+  destroyHls();
+  el.video.pause();
+  el.video.removeAttribute('src');
+  try { el.video.load(); } catch (_) {}
+  el.player.classList.remove('open');
+  el.player.setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('playing');
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
+// Autoplay is often blocked with sound. Try unmuted, fall back to muted.
+// Every await re-checks that we are still the active playback request — a
+// previous stream's play() promise can resolve after the user switched.
+let autoplayHintShown = false;
+
+async function playVideo(isCurrent) {
+  const v = el.video;
+  if (!isCurrent()) return false;
+
+  try {
+    v.muted = false;
+    await v.play();
+    hideAutoplayHint();
+    return isCurrent();
+  } catch (err) {
+    // load() rejects the previous stream's play() promise with AbortError.
+    // That is a switch, not a blocked autoplay.
+    if (!isCurrent() || (err && err.name === 'AbortError')) return false;
+
+    // Sound was blocked: fall back to muted playback so the picture still plays,
+    // and offer a one-tap unmute inside the user gesture.
     try {
-      const host = new URL(url).hostname.toLowerCase();
-      return ['goo.gl', 'bit.ly', 'tinyurl.com', 't.co', 'is.gd', 'ow.ly'].includes(host);
-    } catch (_) {
+      v.muted = true;
+      await v.play();
+      if (!isCurrent()) return false;
+      showAutoplayHint();
+      return true;
+    } catch (e2) {
+      if (!isCurrent()) return false;
+      // Fully blocked (NotAllowedError): surface an explicit play button.
+      if (e2 && e2.name === 'NotAllowedError') showAutoplayHint('tap');
       return false;
     }
   }
+}
 
-  function loadStream(url) {
-    if (!url || typeof url !== 'string') {
-      showPlaybackError('This channel does not have a valid stream URL.');
-      return;
-    }
-
-    // Invalidate the previous attempt before pausing/loading the media element.
-    // Any old play() promise rejection will now be recognized as stale.
-    clearPlaybackTimer();
-    playbackAttempt += 1;
-    const attempt = playbackAttempt;
-    destroyHls();
-
-    const video = els.player;
-    els.playerError.classList.add('hidden');
-    els.playerLoading.classList.remove('hidden');
-    els.startPlayback.classList.add('hidden');
-    const loadingLabel = els.playerLoading.querySelector('span');
-    if (loadingLabel) loadingLabel.textContent = 'Connecting to stream…';
-    els.streamInfo.textContent = '';
-    renderMirrorButtons();
-
-    video.pause();
-    video.onplaying = null;
-    video.onerror = null;
-    video.onloadedmetadata = null;
-    video.onstalled = null;
-    video.onwaiting = null;
-    video.removeAttribute('src');
-    video.load();
-
-    const isSecure = location.protocol === 'https:';
-    const isHttp = /^http:\/\//i.test(url);
-    const isHls = /\.m3u8(?:$|[?#])/i.test(url);
-    const HlsLibrary = window.Hls;
-
-    if (isSecure && isHttp) {
-      failCurrentMirror('This mirror uses HTTP, which browsers block on HTTPS pages.', attempt);
-      return;
-    }
-
-    video.onplaying = () => {
-      if (attempt !== playbackAttempt) return;
-      clearPlaybackTimer();
-      els.playerLoading.classList.add('hidden');
-      els.startPlayback.classList.add('hidden');
-      els.playerError.classList.add('hidden');
+function showAutoplayHint(mode) {
+  let btn = document.getElementById('autoplayBtn');
+  if (!btn) {
+    btn = document.createElement('button');
+    btn.id = 'autoplayBtn';
+    btn.className = 'autoplay-btn';
+    btn.type = 'button';
+    btn.onclick = () => {
+      const v = el.video;
+      v.muted = false;
+      v.play().catch(() => {
+        v.muted = true;
+        return v.play();
+      }).finally(() => { btn.textContent = '🔇 Muted'; });
     };
+    el.playerStage.appendChild(btn);
+  }
+  btn.textContent = mode === 'tap' ? '▶ Tap to play' : '🔊 Tap for sound';
+  if (mode === 'tap') btn.onclick = () => {
+    el.video.play().catch(() => {});
+    btn.remove();
+  };
+  btn.hidden = false;
+  autoplayHintShown = true;
+}
 
-    video.onerror = () => {
-      if (attempt !== playbackAttempt) return;
-      const mediaError = video.error;
-      let detail = mediaError
-        ? `Media error ${mediaError.code}${mediaError.message ? ': ' + mediaError.message : ''}.`
-        : 'The browser could not load this stream.';
-      if (isShortenedUrl(url)) {
-        detail = 'This channel uses a shortened link. The player needs a direct .m3u8 or supported media URL; the redirect target cannot be inspected by the browser.';
-      }
-      failCurrentMirror(detail, attempt);
+function hideAutoplayHint() {
+  const btn = document.getElementById('autoplayBtn');
+  if (btn) btn.remove();
+  autoplayHintShown = false;
+}
+
+function destroyHls() {
+  if (hls) { try { hls.destroy(); } catch (_) {} hls = null; }
+}
+
+function failPlayer(msg) {
+  el.playerLoading.hidden = true;
+  el.playerError.hidden = false;
+  el.playerErrorMsg.textContent = msg;
+}
+
+function renderMirrors() {
+  el.mirrors.innerHTML = '';
+  if (mirrors.length <= 1) return;
+  mirrors.forEach((url, i) => {
+    const b = document.createElement('button');
+    b.className = 'mirror-btn' + (i === mirrorIndex ? ' active' : '');
+    b.textContent = `Stream ${i + 1}`;
+    b.title = url;
+    b.onclick = () => {
+      if (i === mirrorIndex) return;
+      mirrorIndex = i;
+      renderMirrors();
+      startPlayback(i, ++attemptId);
     };
+    el.mirrors.appendChild(b);
+  });
+}
 
-    video.onstalled = () => {
-      if (attempt === playbackAttempt) console.warn('Stream stalled:', url);
-    };
+// Skip http:// mirrors when the page is on https — browsers block mixed media.
+function usableMirrors() {
+  if (location.protocol !== 'https:') return mirrors;
+  return mirrors.filter(u => u.startsWith('https://'));
+}
 
-    playbackTimer = setTimeout(() => {
-      if (attempt === playbackAttempt) {
-        failCurrentMirror(`No playback started within ${PLAYBACK_TIMEOUT_MS / 1000} seconds.`, attempt);
-      }
-    }, PLAYBACK_TIMEOUT_MS);
-
-    if (isHls && HlsLibrary && HlsLibrary.isSupported()) {
-      hls = new HlsLibrary({
-        enableWorker: true,
-        manifestLoadingTimeOut: 8000,
-        levelLoadingTimeOut: 10000,
-        fragLoadingTimeOut: 12000,
-        manifestLoadingMaxRetry: 1,
-        levelLoadingMaxRetry: 1,
-        fragLoadingMaxRetry: 1
-      });
-
-      hls.on(HlsLibrary.Events.ERROR, (event, data) => {
-        if (attempt !== playbackAttempt) return;
-        console.error('HLS playback error:', data);
-        if (data.fatal) {
-          failCurrentMirror(`HLS error: ${data.details || data.type || 'fatal playback error'}.`, attempt);
-        }
-      });
-
-      hls.on(HlsLibrary.Events.MANIFEST_PARSED, () => {
-        if (attempt === playbackAttempt) requestPlayback(video, attempt);
-      });
-
-      hls.loadSource(url);
-      hls.attachMedia(video);
-    } else if (isHls && video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = url;
-      requestPlayback(video, attempt);
-    } else if (!isHls) {
-      video.src = url;
-      requestPlayback(video, attempt);
-    } else {
-      failCurrentMirror('HLS is not supported in this browser because the HLS.js library did not load.', attempt);
-    }
-
-    if (isSecure && currentMirrors.some((mirror) => /^http:\/\//i.test(mirror))) {
-      els.playerHint.classList.remove('hidden');
-    } else {
-      els.playerHint.classList.add('hidden');
-    }
+async function startPlayback(index, myAttempt) {
+  const usable = usableMirrors();
+  if (!usable.length) {
+    failPlayer('This channel only offers http:// streams, which browsers block on secure pages. Try another channel.');
+    return;
   }
+  mirrorIndex = Math.min(index, usable.length - 1);
+  const url = usable[mirrorIndex];
+  const myPlay = ++playId;
 
-  function handleStreamError(isSecure, isHttp) {
-    const message = isSecure && isHttp
-      ? 'This stream is HTTP-only and browsers block it on HTTPS sites.'
-      : 'This stream is not playing.';
-    failCurrentMirror(message, playbackAttempt);
-  }
+  destroyHls();
+  el.playerError.hidden = true;
+  el.playerLoading.hidden = false;
+  el.loadingText.textContent = usable.length > 1
+    ? `Connecting to stream ${mirrorIndex + 1} of ${usable.length}…`
+    : 'Connecting…';
+  renderMirrors();
 
-  function renderMirrorButtons() {
-    els.mirrorList.innerHTML = '';
-    currentMirrors.forEach((url, i) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `mirror-btn ${i === mirrorIndex ? 'active' : ''}`;
-      btn.title = url;
-      btn.textContent = `Stream ${i + 1}`;
-      btn.onclick = () => {
-        if (i === mirrorIndex) return;
-        mirrorIndex = i;
-        renderMirrorButtons();
-        loadStream(url);
-      };
-      els.mirrorList.appendChild(btn);
-    });
-    const info = currentMirrors.length > 1 ? `${currentMirrors.length} mirror${currentMirrors.length > 1 ? 's' : ''} available` : '';
-    els.streamInfo.textContent = info;
-  }
+  const v = el.video;
+  v.removeAttribute('src');
+  try { v.load(); } catch (_) {}
 
-  function playNextMirror() {
-    if (!currentMirrors.length) {
-      showPlaybackError('No stream mirrors are available for this channel.');
-      return;
-    }
-    // Manual Retry starts from the first mirror and then follows the same
-    // bounded failover sequence as automatic recovery.
-    mirrorIndex = 0;
-    renderMirrorButtons();
-    loadStream(currentMirrors[mirrorIndex]);
-  }
+  const isHls = /\.m3u8(\?|$)/i.test(url) || /m3u8/i.test(url);
+  const nativeHls = v.canPlayType('application/vnd.apple.mpegurl') !== '';
 
-  els.retryPlayer.onclick = () => playNextMirror();
-
-  // A browser may reject autoplay even after a valid stream is loaded. Provide
-  // a real user-gesture button above the video controls instead of trapping
-  // the user behind a permanent loading overlay.
-  els.startPlayback.onclick = () => {
-    const attempt = playbackAttempt;
-    const video = els.player;
-    video.muted = false;
-    let playRequest;
-    try {
-      playRequest = video.play();
-    } catch (error) {
-      if (attempt === playbackAttempt) {
-        const hint = els.playerLoading.querySelector('span');
-        if (hint) hint.textContent = 'Playback is still blocked. Check your browser permissions and try again.';
-      }
-      return;
-    }
-    if (playRequest && typeof playRequest.then === 'function') {
-      playRequest.then(() => {
-        if (attempt !== playbackAttempt) return;
-        els.startPlayback.classList.add('hidden');
-      }).catch((error) => {
-        if (attempt !== playbackAttempt || (error && error.name === 'AbortError')) return;
-        const hint = els.playerLoading.querySelector('span');
-        if (hint) hint.textContent = 'Could not start playback. Try another stream mirror.';
-      });
-    }
+  const done = () => {
+    if (myAttempt !== attemptId) return;
+    el.playerLoading.hidden = true;
+    el.playerError.hidden = true;
   };
 
-  // --- Fullscreen ---
-  function toggleFullscreen() {
-    const container = els.playerWrapEl || (els.playerWrapEl = document.querySelector('.player-wrap'));
-    if (!document.fullscreenElement) {
-      container.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen();
-    }
-  }
-  els.npFullscreen.onclick = toggleFullscreen;
+  const restart = setInterval(async () => {
+    if (!hls || myAttempt !== attemptId) { clearInterval(restart); return; }
+    try { await hls.startLoad(); } catch (_) {}
+    clearInterval(restart);
+  }, 2000);
 
-  // --- Player events ---
-  function initPlayerEvents() {
-    els.playerClose.onclick = () => {
-      els.playerPanel.classList.remove('open');
-      els.playerPanel.setAttribute('aria-hidden', 'true');
-      stopPlayer();
-    };
-    els.npFav.onclick = () => { if (current) toggleFav(current.id); };
-    els.searchInput.oninput = debounce((e) => { filters.q = e.target.value; renderFilters(); renderChannels(); pushFilterUrl(); }, 200);
-    els.searchClear.onclick = () => { els.searchInput.value = ''; filters.q = ''; renderFilters(); renderChannels(); pushFilterUrl(); };
-    els.countrySearch.oninput = debounce(() => { renderCountryList(); }, 100); // country filter applied by clicking items
-    els.viewGrid.onclick = () => setView('grid');
-    els.viewList.onclick = () => setView('list');
-
-    // Responsive filter drawer: keep the scrim and accessibility state in sync.
-    els.toggleSidebar.onclick = () => {
-      const shouldOpen = !els.sidebar.classList.contains('open');
-      els.sidebar.classList.toggle('open', shouldOpen);
-      els.sidebarOverlay.classList.toggle('open', shouldOpen);
-      els.toggleSidebar.setAttribute('aria-expanded', String(shouldOpen));
-    };
-    els.sidebarClose.onclick = closeSidebar;
-    els.sidebarOverlay.onclick = closeSidebar;
-
-    // Close the active overlay with Escape on touch and desktop keyboards.
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        if (document.fullscreenElement) document.exitFullscreen();
-        else if (els.playerPanel.classList.contains('open')) {
-          els.playerPanel.classList.remove('open');
-          els.playerPanel.setAttribute('aria-hidden', 'true');
-        } else closeSidebar();
+  if (isHls && !nativeHls && window.Hls && Hls.isSupported()) {
+    hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: true,
+      backBufferLength: 30,
+      manifestLoadingMaxRetry: 1,
+      levelLoadingMaxRetry: 1,
+      fragLoadingMaxRetry: 2,
+      manifestLoadingTimeOut: 8000,
+      levelLoadingTimeOut: 8000,
+      fragLoadingTimeOut: 12000,
+    });
+    hls.loadSource(url);
+    hls.attachMedia(v);
+    const isCurrent = () => playId === myPlay;
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      clearInterval(restart);
+      if (!isCurrent()) return;
+      playVideo(isCurrent);
+    });
+    hls.on(Hls.Events.ERROR, (_e, data) => {
+      if (!data.fatal || myAttempt !== attemptId) return;
+      clearInterval(restart);
+      switch (data.type) {
+        case Hls.ErrorTypes.NETWORK_ERROR:
+          if (mirrorIndex + 1 < usableMirrors().length) startPlayback(mirrorIndex + 1, ++attemptId);
+          else failPlayer('This stream is offline or unreachable right now. Try another channel.');
+          break;
+        case Hls.ErrorTypes.MEDIA_ERROR:
+          try { hls.recoverMediaError(); } catch (_) { failPlayer('Playback error — try another stream.'); }
+          break;
+        default:
+          failPlayer('This channel isn\'t responding. Try another stream or channel.');
       }
     });
+    v.addEventListener('playing', done, { once: true });
+  } else {
+    // native playback (Safari HLS / direct mp4)
+    clearInterval(restart);
+    v.src = url;
+    v.addEventListener('loadeddata', done, { once: true });
+    v.addEventListener('error', () => {
+      if (myAttempt !== attemptId) return;
+      const use = usableMirrors();
+      if (mirrorIndex + 1 < use.length) startPlayback(mirrorIndex + 1, ++attemptId);
+      else failPlayer('This stream can\'t be played in your browser. Try another channel.');
+    }, { once: true });
+    playVideo(() => playId === myPlay);
   }
+}
 
-  function closeSidebar() {
-    els.sidebar.classList.remove('open');
-    els.sidebarOverlay.classList.remove('open');
-    els.toggleSidebar.setAttribute('aria-expanded', 'false');
+function buildUpNext(ch) {
+  const pool = (byCountry.get(ch.countryCode) || []).filter(c => c.id !== ch.id && c.logo);
+  const pick = (pool.length >= 8 ? pool : channels.filter(c => c.logo && c.category === ch.category))
+    .slice(0, 20);
+  el.upNextScroll.innerHTML = '';
+  for (const c of pick) {
+    const t = tile(c);
+    t.style.width = '132px';
+    el.upNextScroll.appendChild(t);
   }
+}
 
-  function setView(mode) {
-    viewMode = mode;
-    els.viewGrid.classList.toggle('active', mode === 'grid');
-    els.viewList.classList.toggle('active', mode === 'list');
-    renderChannels();
-    pushFilterUrl();
-  }
+function recordRecent(id) {
+  recent = [id, ...recent.filter(x => x !== id)].slice(0, 20);
+  store(RECENT_KEY, recent);
+}
 
-  function stopPlayer() {
-    clearPlaybackTimer();
-    playbackAttempt += 1;
-    destroyHls();
-    els.player.pause();
-    els.player.src = '';
-    els.player.load();
-    els.playerLoading.classList.add('hidden');
-    els.startPlayback.classList.add('hidden');
-    els.playerError.classList.add('hidden');
-    current = null;
-  }
+// ---------------- global events ----------------
+let searchTimer = null;
 
-  function debounce(fn, wait) {
-    let t;
-    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
-  }
+function bindGlobal() {
+  // top bar shadow
+  window.addEventListener('scroll', () => {
+    el.topbar.classList.toggle('scrolled', window.scrollY > 12);
+  }, { passive: true });
 
-  function maybePlayFromUrl() {
-    const hash = location.hash.slice(1);
-    if (hash && channels.length) {
-      const ch = channels.find(c => c.id === hash);
-      if (ch) selectChannel(ch);
+  // search
+  el.searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const val = el.searchInput.value;
+    el.searchClear.classList.toggle('show', !!val);
+    searchTimer = setTimeout(() => runSearch(val), 180);
+  });
+  el.searchClear.onclick = () => {
+    el.searchInput.value = '';
+    el.searchInput.focus();
+    runSearch('');
+  };
+
+  // nav
+  document.querySelectorAll('[data-nav]').forEach(btn => {
+    btn.onclick = () => {
+      const target = btn.dataset.nav;
+      if (target === 'home') { showHome(); }
+      else if (target === 'search') {
+        document.body.classList.add('search-mode');
+        el.searchInput.focus();
+      }
+      else if (target === 'browse') { showBrowse({ title: 'All channels' }); }
+      else if (target === 'favorites') { showFavorites(); }
+      else { showBrowse({ category: target.replace(/^\w/, c => c.toUpperCase()), title: target.replace(/^\w/, c => c.toUpperCase()) }); }
+      setActiveNav(target);
+    };
+  });
+
+  el.favBtn.onclick = () => { showFavorites(); };
+  el.browseBack.onclick = () => { showHome(); };
+
+  // player
+  el.playerClose.onclick = closePlayer;
+  el.npFav.onclick = () => { if (current) toggleFav(current.id); };
+  el.retryBtn.onclick = () => { if (current) startPlayback(mirrorIndex, ++attemptId); };
+  el.nextMirrorBtn.onclick = () => {
+    const use = usableMirrors();
+    if (use.length > 1) startPlayback((mirrorIndex + 1) % use.length, ++attemptId);
+    else failPlayer('No other streams to try.');
+  };
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (isOpen) closePlayer();
+      else if (document.body.classList.contains('search-mode')) {
+        document.body.classList.remove('search-mode');
+        runSearch('');
+      }
     }
+  });
+
+  // reflect favorite state on the top bar
+  el.favBtn.classList.toggle('on', favs.size > 0);
+
+  // back/forward support for grid views
+  window.addEventListener('popstate', handleRoute);
+}
+
+function handleRoute() {
+  const hash = location.hash.replace('#', '');
+  if (hash && byId.has(hash)) {
+    showHome();
+    setTimeout(() => openPlayer(byId.get(hash)), 120);
   }
+}
 
-  // --- Boot ---
-  loadData();
-
-  // expose for debug
-  window.__freetv = { channels: () => channels, filters: () => filters, selectChannel };
+boot();
 })();
